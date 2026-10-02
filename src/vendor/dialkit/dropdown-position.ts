@@ -91,7 +91,7 @@ export function observeDropdownPosition(trigger: HTMLElement, update: () => void
   };
 }
 
-// uipane: popups live in the shadow root's overlay container.
+// tunekit: popups live in the shadow root's overlay container.
 export function getDialKitPortalRoot(trigger: HTMLElement | null | undefined): HTMLElement | null {
   const root = trigger?.getRootNode() as ParentNode | undefined;
   return root?.querySelector?.<HTMLElement>('.up-portal') ?? null;

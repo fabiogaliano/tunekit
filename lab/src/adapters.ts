@@ -1,7 +1,7 @@
 import type { DialConfig } from "dialkit";
-import type { PaneConfig, SelectOption } from "uipane";
+import type { PaneConfig, SelectOption } from "tunekit";
 
-// uipane's published ControlConfig/PaneConfig are circular type aliases, so
+// tunekit's published ControlConfig/PaneConfig are circular type aliases, so
 // TypeScript collapses entries to `unknown`; restate the shapes we translate.
 type Entry =
   | { type: "slider"; value: number; min: number; max: number; step?: number }
@@ -20,7 +20,7 @@ type Entry =
 const isExplicit = (v: unknown): v is Entry =>
   typeof v === "object" && v !== null && !Array.isArray(v) && "type" in v;
 
-/** Translate a uipane config into the equivalent dialkit config. */
+/** Translate a tunekit config into the equivalent dialkit config. */
 export function toDialkit(config: PaneConfig): DialConfig {
   const out: DialConfig = {};
   for (const [key, raw] of Object.entries(config)) {

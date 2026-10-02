@@ -1,17 +1,17 @@
 ---
-name: uipane
-description: Add live tuning controls (sliders, toggles, colors and gradients, springs, easings, pads) to a React UI with uipane, bind them to real values, and apply values the user copies from the panel back into source. Use when the user wants to tweak, tune, dial in or compare visual or motion values by eye, or pastes a "Update the usePane configuration…" block.
+name: tunekit
+description: Add live tuning controls (sliders, toggles, colors and gradients, springs, easings, pads) to a React UI with tunekit, bind them to real values, and apply values the user copies from the panel back into source. Use when the user wants to tweak, tune, dial in or compare visual or motion values by eye, or pastes a "Update the usePane configuration…" block.
 ---
 
-# uipane
+# tunekit
 
-uipane is a floating dev panel for React. You declare controls next to the component being tuned, the hook returns live values, and the user adjusts them in the panel instead of editing constants and reloading. The panel renders in a Shadow DOM, so it never inherits or leaks app styles.
+tunekit is a floating dev panel for React. You declare controls next to the component being tuned, the hook returns live values, and the user adjusts them in the panel instead of editing constants and reloading. The panel renders in a Shadow DOM, so it never inherits or leaks app styles.
 
 ## Workflow
 
 1. Inspect the project: framework (React 18+), package manager, and where the values being tuned live (inline styles, CSS variables, Tailwind classes, motion props, three.js params…).
-2. Install with the project's package manager: `bun add uipane` / `pnpm add uipane` / `npm i uipane`.
-3. Mount **one** `<PaneRoot />` near the app root. In Next.js App Router, uipane code goes in a `"use client"` component.
+2. Install with the project's package manager: `bun add tunekit` / `pnpm add tunekit` / `npm i tunekit`.
+3. Mount **one** `<PaneRoot />` near the app root. In Next.js App Router, tunekit code goes in a `"use client"` component.
 4. In the component being tuned, call `usePane(name, config)`. Start each control at the value the code uses today, with a range that brackets sensible alternatives.
 5. Bind the returned values to the real styles/props. Don't create parallel demo elements.
 6. Group related controls in folders (a plain nested object). Add an `action` to replay one-shot animations.
@@ -23,7 +23,7 @@ Keep the set small and useful: 3–10 controls a component, named the way the us
 ## API
 
 ```tsx
-import { PaneRoot, usePane } from "uipane";
+import { PaneRoot, usePane } from "tunekit";
 
 function Card() {
   const v = usePane("Card", {
@@ -81,7 +81,7 @@ const v = usePane("Card", { stops: { type: "slot", label: "Gradient stops" } });
 </PaneSlot>
 ```
 
-The slot renders inside the panel's Shadow DOM, isolated from the app on purpose: the app's CSS (Tailwind classes, global styles) doesn't apply, so the panel's look can't break. Style slot content with inline styles and uipane's tokens: `var(--up-surface)`, `--up-surface-hover`, `--up-border`, `--up-text-1` … `--up-text-4`, `--up-radius`, `--up-row-h`. React state and events work as normal. A slot holds no value, so keep its state in the component, or in `usePaneController` via `setValue`.
+The slot renders inside the panel's Shadow DOM, isolated from the app on purpose: the app's CSS (Tailwind classes, global styles) doesn't apply, so the panel's look can't break. Style slot content with inline styles and tunekit's tokens: `var(--up-surface)`, `--up-surface-hover`, `--up-border`, `--up-text-1` … `--up-text-4`, `--up-radius`, `--up-row-h`. React state and events work as normal. A slot holds no value, so keep its state in the component, or in `usePaneController` via `setValue`.
 
 `<PaneRoot>{children}</PaneRoot>` puts content at the top of the panel the same way.
 
@@ -101,7 +101,7 @@ Apply these values as the new defaults in the usePane call. Keys are dot-paths i
 
 Only changed values are listed. The file is where `usePane` is called. If the config is imported from another module, follow the import.
 
-**Live bridge (Vite).** With `uipane()` from `uipane/vite` in the Vite config, the dev server keeps `.uipane/values.json` up to date while the page is open. The folder ignores itself in git.
+**Live bridge (Vite).** With `tunekit()` from `tunekit/vite` in the Vite config, the dev server keeps `.tunekit/values.json` up to date while the page is open. The folder ignores itself in git.
 
 ```json
 {
@@ -114,7 +114,7 @@ Only changed values are listed. The file is where `usePane` is called. If the co
 ```
 
 - When the user says "apply my panel values", read `changed` from that file instead of asking them to copy.
-- To show the user something, write `.uipane/set.json` as `{ "Card": { "radius": 30, "shadow.blur": 8 } }`. The open panel applies it at once and the file is deleted. It's a preview: source code doesn't change until you edit it.
+- To show the user something, write `.tunekit/set.json` as `{ "Card": { "radius": 30, "shadow.blur": 8 } }`. The open panel applies it at once and the file is deleted. It's a preview: source code doesn't change until you edit it.
 - If `values.json` is missing or stale, ask the user to open the page with the dev server running.
 
 Writing values back: keys are dot-paths into the config (`shadow.blur` → `shadow: { blur: … }`). For each key:

@@ -127,7 +127,7 @@ type ShortcutConfig = {
   mode?: "fine" | "normal" | "coarse";
   interaction?: "scroll" | "drag" | "move" | "scroll-only";
 };
-/** Keep values (and presets) across reloads. `true` stores under `uipane:<name>`. */
+/** Keep values (and presets) across reloads. `true` stores under `tunekit:<name>`. */
 type PersistOptions = boolean | {
   key?: string;
   storage?: "localStorage" | "sessionStorage";

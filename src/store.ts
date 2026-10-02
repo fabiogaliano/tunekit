@@ -368,7 +368,7 @@ class PaneStoreClass {
     if (!persist) return null;
     const o = typeof persist === "object" ? persist : {};
     return {
-      key: o.key ?? `uipane:${name}`,
+      key: o.key ?? `tunekit:${name}`,
       storage: o.storage ?? "localStorage",
       presets: o.presets ?? true,
     };

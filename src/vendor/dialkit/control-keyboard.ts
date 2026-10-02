@@ -71,7 +71,7 @@ export function openDropdownOnKey(event: KeyEvent, open: () => void): void {
 
 /** Find the next control in the owner's document order, excluding floating content. */
 export function adjacentTabStop(trigger: HTMLElement, backwards = false): HTMLElement | undefined {
-  // uipane: search the trigger's own (shadow) root, not the outer document.
+  // tunekit: search the trigger's own (shadow) root, not the outer document.
   const candidates = Array.from((trigger.getRootNode() as ParentNode).querySelectorAll<HTMLElement>('a[href], button, input, select, textarea, [tabindex], [contenteditable="true"]'));
   const stops = candidates.filter(el => el === trigger || (
     el.tabIndex >= 0 && !el.matches(':disabled') && el.getClientRects().length > 0 &&

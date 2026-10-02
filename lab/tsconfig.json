@@ -11,7 +11,7 @@
     "allowImportingTsExtensions": true,
     "isolatedModules": true,
     "types": ["vite/client"],
-    "paths": { "uipane": ["../dist/index.d.mts"] }
+    "paths": { "tunekit": ["../dist/index.d.mts"] }
   },
   "include": ["src"]
 }

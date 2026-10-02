@@ -1,20 +1,20 @@
 import { DialRoot } from "dialkit";
 import { useMemo } from "react";
-import { PaneRoot, PaneSlot } from "uipane";
-import { useDialkitBinding, useUipaneBinding } from "./bindings.tsx";
+import { PaneRoot, PaneSlot } from "tunekit";
+import { useDialkitBinding, useTunekitBinding } from "./bindings.tsx";
 import { Caption, StatsReadout } from "./Overlay.tsx";
 import { Scene } from "./scene/Scene.tsx";
 import { createStatsStore } from "./scene/stats.ts";
 
 const half = { position: "relative", flex: 1, minWidth: 0, height: "100%" } as const;
 
-export function UipaneSide() {
-  const { params, signals } = useUipaneBinding();
+export function TunekitSide() {
+  const { params, signals } = useTunekitBinding();
   const stats = useMemo(createStatsStore, []);
   return (
     <div style={half}>
       <Scene params={params} signals={signals} stats={stats} />
-      <Caption title="uipane" label={params.motion.label} stats={stats} />
+      <Caption title="tunekit" label={params.motion.label} stats={stats} />
       <PaneRoot />
       <PaneSlot panel="Hero" path="stats">
         <StatsReadout stats={stats} />
@@ -38,7 +38,7 @@ export function DialkitSide({ position = "top-right" }: { position?: "top-right"
 export function Compare() {
   return (
     <div style={{ display: "flex", height: "100%", gap: 2, background: "#222" }}>
-      <UipaneSide />
+      <TunekitSide />
       <DialkitSide />
     </div>
   );

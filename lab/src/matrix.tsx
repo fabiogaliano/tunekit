@@ -1,4 +1,4 @@
-type Row = [feature: string, uipane: string, dialkit: string];
+type Row = [feature: string, tunekit: string, dialkit: string];
 
 const ROWS: Row[] = [
   ["Frameworks", "React (UI is Preact, bundled)", "React, Solid, Vue, Svelte, vanilla"],
@@ -17,7 +17,7 @@ const ROWS: Row[] = [
   ["Persist shell geometry", "✓ localStorage", "—"],
   ["Persist values / presets", "✓ opt-in persist", "✓ opt-in persist"],
   ["Presets + Copy-for-AI", "✓ (changed values + source file)", "✓"],
-  ["Agent bridge", "✓ uipane/vite: .uipane/values.json + set.json", "—"],
+  ["Agent bridge", "✓ tunekit/vite: .tunekit/values.json + set.json", "—"],
   ["Keyboard", "Roving focus, arrows, Home/End", "Full roving focus, arrows, Home/End"],
   ["Hotkey-scrub shortcuts", "✓ per-control", "✓ per-control"],
   ["Theme", "Dark only", "light / dark / system"],
@@ -30,7 +30,7 @@ export function Matrix() {
     <div style={{ padding: "64px 24px 24px", maxWidth: 980, margin: "0 auto" }}>
       <table style={{ borderCollapse: "collapse", width: "100%" }}>
         <thead>
-          <tr>{["", "uipane 0.1.0", "dialkit 2.0.2"].map((h) => <th key={h} style={cell(true)}>{h}</th>)}</tr>
+          <tr>{["", "tunekit 1.0.0", "dialkit 2.0.2"].map((h) => <th key={h} style={cell(true)}>{h}</th>)}</tr>
         </thead>
         <tbody>
           {ROWS.map(([f, u, d]) => (

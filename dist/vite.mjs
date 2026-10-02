@@ -1,11 +1,11 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 //#region src/vite.ts
-const ENDPOINT = "/__uipane/values";
-const CLIENT_ID = "/@uipane/client";
-const RESOLVED_CLIENT_ID = "\0uipane-client";
+const ENDPOINT = "/__tunekit/values";
+const CLIENT_ID = "/@tunekit/client";
+const RESOLVED_CLIENT_ID = "\0tunekit-client";
 const CLIENT = `
-import { PaneStore } from "uipane";
+import { PaneStore } from "tunekit";
 
 const watched = new Map();
 let timer = 0;
@@ -41,7 +41,7 @@ PaneStore.subscribeGlobal(rewatch);
 rewatch();
 
 if (import.meta.hot) {
-  import.meta.hot.on("uipane:set", (data) => {
+  import.meta.hot.on("tunekit:set", (data) => {
     for (const [name, values] of Object.entries(data ?? {})) {
       const panel = PaneStore.getPanels().find((p) => p.name === name || p.id === name);
       if (panel && values && typeof values === "object") PaneStore.updateValues(panel.id, values);
@@ -51,17 +51,17 @@ if (import.meta.hot) {
 `;
 /**
 * Dev-only bridge between the panel and coding agents:
-* - the page's panel values are mirrored to `.uipane/values.json`;
-* - writing `{ "<panel>": { "<path>": value } }` to `.uipane/set.json` pushes
+* - the page's panel values are mirrored to `.tunekit/values.json`;
+* - writing `{ "<panel>": { "<path>": value } }` to `.tunekit/set.json` pushes
 *   those values into the open panel (the file is consumed and deleted).
 */
-function uipane(options = {}) {
+function tunekit(options = {}) {
 	let dir = "";
 	return {
-		name: "uipane",
+		name: "tunekit",
 		apply: "serve",
 		configureServer(server) {
-			dir = resolve(server.config.root, options.dir ?? ".uipane");
+			dir = resolve(server.config.root, options.dir ?? ".tunekit");
 			mkdirSync(dir, { recursive: true });
 			const ignore = resolve(dir, ".gitignore");
 			if (!existsSync(ignore)) writeFileSync(ignore, "*\n");
@@ -86,7 +86,7 @@ function uipane(options = {}) {
 					const data = JSON.parse(readFileSync(setFile, "utf8"));
 					server.ws.send({
 						type: "custom",
-						event: "uipane:set",
+						event: "tunekit:set",
 						data
 					});
 					rmSync(setFile);
@@ -116,4 +116,4 @@ function uipane(options = {}) {
 	};
 }
 //#endregion
-export { uipane as default, uipane };
+export { tunekit as default, tunekit };

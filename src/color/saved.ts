@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "preact/compat";
 
 export type SavedColor = { kind: "solid" | "gradient"; value: string };
 
-const KEY = "uipane:saved-colors";
+const KEY = "tunekit:saved-colors";
 const listeners = new Set<() => void>();
 
 function read(): SavedColor[] {

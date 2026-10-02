@@ -1,4 +1,4 @@
-// uipane addition: dialkit assumes light DOM. Inside a shadow root,
+// tunekit addition: dialkit assumes light DOM. Inside a shadow root,
 // document-level events and document.activeElement are retargeted to the
 // shadow host, which breaks its outside-click and focus checks.
 

@@ -1,6 +1,6 @@
 import { useDialKitController } from "dialkit";
 import { useCallback, useMemo, useState } from "react";
-import { usePane, usePaneController } from "uipane";
+import { usePane, usePaneController } from "tunekit";
 import { toDialkit } from "./adapters.ts";
 import { fieldSchema, heroSchema, lightSchema, motionSchema, shortcuts, viewSchema } from "./schema.ts";
 import type { SceneParams, SceneSignals } from "./scene/params.ts";
@@ -20,9 +20,9 @@ function useSignals() {
   return [signals, bump] as const;
 }
 
-export function useUipaneBinding(): Binding {
+export function useTunekitBinding(): Binding {
   const [signals, bump] = useSignals();
-  const persist = (name: string) => ({ key: `lab:uipane:${name}` });
+  const persist = (name: string) => ({ key: `lab:tunekit:${name}` });
   const hero = usePane("Hero", heroSchema, {
     persist: persist("hero"),
     shortcuts: shortcuts.hero,

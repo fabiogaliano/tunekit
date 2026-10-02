@@ -1,8 +1,27 @@
 {
-  "name": "uipane",
-  "version": "0.1.0",
-  "description": "Dev panel library — floating, dockable control panels with drag, snap, collapse, and polished controls.",
+  "name": "tunekit",
+  "version": "1.0.0",
+  "description": "Floating dev panel for tuning React UIs by eye — sliders, colors, springs and easings in a Shadow DOM panel you can drag, dock and copy back to code.",
   "license": "MIT",
+  "author": "Fábio Galiano",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fabiogaliano/tunekit.git"
+  },
+  "homepage": "https://github.com/fabiogaliano/tunekit#readme",
+  "bugs": "https://github.com/fabiogaliano/tunekit/issues",
+  "keywords": [
+    "react",
+    "devtools",
+    "tweak",
+    "tuning",
+    "controls",
+    "panel",
+    "gui",
+    "color-picker",
+    "spring",
+    "easing"
+  ],
   "type": "module",
   "files": ["dist", "skills"],
   "main": "./dist/index.mjs",
@@ -23,9 +42,9 @@
   },
   "scripts": {
     "build": "vp pack",
-    "prepare": "bun run build",
+    "prepare": "git config core.hooksPath .githooks || true",
+    "prepack": "vp pack",
     "dev": "vp pack --watch",
-    "test": "vp test",
     "typecheck": "tsc --noEmit",
     "check": "vp check"
   },
@@ -51,5 +70,9 @@
       "vite": "npm:@voidzero-dev/vite-plus-core@latest",
       "vitest": "npm:@voidzero-dev/vite-plus-test@latest"
     }
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

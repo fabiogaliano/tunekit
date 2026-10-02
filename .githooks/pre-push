@@ -1,0 +1,7 @@
+#!/bin/sh
+# Only gate pushes to main; feature branches can push work in progress.
+while read -r _ _ remote_ref _; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    exec pnpm run typecheck
+  fi
+done

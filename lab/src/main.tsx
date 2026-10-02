@@ -2,17 +2,17 @@ import "dialkit/styles.css";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Matrix } from "./matrix.tsx";
-import { Compare, DialkitSide, UipaneSide } from "./views.tsx";
+import { Compare, DialkitSide, TunekitSide } from "./views.tsx";
 
-// uipane has no position prop; seed its persisted shell state so the two
+// tunekit has no position prop; seed its persisted shell state so the two
 // panels don't stack in the same corner on first load.
-if (!localStorage.getItem("uipane-widget")) {
-  localStorage.setItem("uipane-widget", JSON.stringify({ corner: "top-left", width: 320, height: 560 }));
+if (!localStorage.getItem("tunekit-widget")) {
+  localStorage.setItem("tunekit-widget", JSON.stringify({ corner: "top-left", width: 320, height: 560 }));
 }
 
 const ROUTES = {
   compare: { label: "Side by side", view: Compare },
-  uipane: { label: "uipane demo", view: UipaneSide },
+  tunekit: { label: "tunekit demo", view: TunekitSide },
   dialkit: { label: "dialkit demo", view: DialkitSide },
   matrix: { label: "Feature matrix", view: Matrix },
 } as const;

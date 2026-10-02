@@ -1,6 +1,6 @@
 //#region src/vite.d.ts
-type UipaneVitePluginOptions = {
-  /** Folder for the bridge files, relative to the Vite root. Default `.uipane`. */dir?: string;
+type TunekitVitePluginOptions = {
+  /** Folder for the bridge files, relative to the Vite root. Default `.tunekit`. */dir?: string;
 };
 type Middleware = (req: {
   method?: string;
@@ -29,15 +29,15 @@ type DevServer = {
 };
 /**
  * Dev-only bridge between the panel and coding agents:
- * - the page's panel values are mirrored to `.uipane/values.json`;
- * - writing `{ "<panel>": { "<path>": value } }` to `.uipane/set.json` pushes
+ * - the page's panel values are mirrored to `.tunekit/values.json`;
+ * - writing `{ "<panel>": { "<path>": value } }` to `.tunekit/set.json` pushes
  *   those values into the open panel (the file is consumed and deleted).
  */
-declare function uipane(options?: UipaneVitePluginOptions): {
+declare function tunekit(options?: TunekitVitePluginOptions): {
   name: string;
   apply: "serve";
   configureServer(server: DevServer): void;
-  resolveId(id: string): "\0uipane-client" | undefined;
+  resolveId(id: string): "\0tunekit-client" | undefined;
   load(id: string): string | undefined;
   transformIndexHtml(): {
     tag: string;
@@ -49,4 +49,4 @@ declare function uipane(options?: UipaneVitePluginOptions): {
   }[];
 };
 //#endregion
-export { UipaneVitePluginOptions, uipane as default, uipane };
+export { TunekitVitePluginOptions, tunekit as default, tunekit };

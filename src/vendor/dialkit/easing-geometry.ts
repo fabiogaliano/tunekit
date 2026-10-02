@@ -1,4 +1,4 @@
-// uipane: EasingConfig['ease'] is readonly here, so name the tuple directly.
+// tunekit: EasingConfig['ease'] is readonly here, so name the tuple directly.
 export type BezierPoints = [number, number, number, number];
 export type GraphPoint = { x: number; y: number };
 

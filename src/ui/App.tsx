@@ -25,11 +25,11 @@ import { Panel } from "./Panel.tsx";
 import { PresetBar } from "./Preset.tsx";
 import { useShortcuts } from "./useShortcuts.ts";
 
-const LS_KEY = "uipane-widget";
-const LS_LAYOUT_KEY = "uipane-layout";
+const LS_KEY = "tunekit-widget";
+const LS_LAYOUT_KEY = "tunekit-layout";
 
 export type PaneLayout = "tabs" | "stack";
-const LS_COLLAPSED_KEY = "uipane-collapsed";
+const LS_COLLAPSED_KEY = "tunekit-collapsed";
 
 function loadLS<T>(key: string): T | null {
   try {
@@ -456,7 +456,7 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
   if (collapsed) {
     const rect = getCollapsedPosition(collapsed.corner, collapsed.orientation, collapsed.anchor);
     const edge = getCollapsedEdge(collapsed.corner, collapsed.orientation);
-    const title = panels.length === 1 ? panels[0]!.name : "uipane";
+    const title = panels.length === 1 ? panels[0]!.name : "tunekit";
     return (
       <>
       {dockTarget !== null &&
@@ -523,7 +523,7 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
       <div class="up-header" onPointerDown={handleDrag}>
         <div class="up-header-left">
           <span class="up-header-title">
-            {panels.length === 1 ? currentPanel?.name ?? "uipane" : "uipane"}
+            {panels.length === 1 ? currentPanel?.name ?? "tunekit" : "tunekit"}
           </span>
         </div>
         {panels.length > 1 && (

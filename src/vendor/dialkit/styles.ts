@@ -1,6 +1,6 @@
 // Styles for the vendored dialkit controls (theme.css @ 0301abd, MIT).
 // Kept on dialkit's class names so upstream changes diff cleanly; the
-// --dial-* variables are mapped onto uipane's palette below.
+// --dial-* variables are mapped onto tunekit's palette below.
 export const DIALKIT_STYLES = /* css */ `
 .up-root,
 .up-portal {

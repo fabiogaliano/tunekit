@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "uipane-lab",
+      "name": "tunekit-lab",
       "dependencies": {
         "@react-three/fiber": "^9.8.1",
         "dialkit": "^2.0.2",

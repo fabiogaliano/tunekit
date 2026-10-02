@@ -1,4 +1,4 @@
-import type { PaneConfig, ShortcutConfig } from "uipane";
+import type { PaneConfig, ShortcutConfig } from "tunekit";
 
 // Small SVG tiles, inlined so the image control works offline.
 const tile = (body: string) =>
@@ -11,7 +11,7 @@ export const PATTERNS = [
   { value: tile('<rect width="64" height="64" fill="#fff"/><circle cx="16" cy="16" r="9" fill="#888"/><circle cx="48" cy="48" r="9" fill="#888"/>'), label: "Dots" },
 ];
 
-// Single source of truth for every dial, written in uipane's explicit format.
+// Single source of truth for every dial, written in tunekit's explicit format.
 // adapters.ts derives the dialkit config from it, so both panels expose the
 // exact same controls, ranges and defaults.
 
@@ -143,7 +143,7 @@ export const motionSchema = {
   pulseStrength: { type: "slider", value: 0.6, min: 0, max: 2 },
   hoverEase: { type: "easing", duration: 0.35, ease: [0.2, 0, 0, 1] },
   hoverScale: { type: "slider", value: 1.15, min: 1, max: 2 },
-  label: { type: "text", value: "uipane × dialkit", placeholder: "Overlay caption" },
+  label: { type: "text", value: "tunekit × dialkit", placeholder: "Overlay caption" },
 } satisfies PaneConfig;
 
 /** Same shortcut format in both libraries. Hold the key and scroll/drag. */

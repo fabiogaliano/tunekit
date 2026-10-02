@@ -1,8 +1,8 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 
-export type UipaneVitePluginOptions = {
-  /** Folder for the bridge files, relative to the Vite root. Default `.uipane`. */
+export type TunekitVitePluginOptions = {
+  /** Folder for the bridge files, relative to the Vite root. Default `.tunekit`. */
   dir?: string;
 };
 
@@ -19,13 +19,13 @@ type DevServer = {
   httpServer: { once(event: "close", fn: () => void): void } | null;
 };
 
-const ENDPOINT = "/__uipane/values";
-const CLIENT_ID = "/@uipane/client";
-const RESOLVED_CLIENT_ID = "\0uipane-client";
+const ENDPOINT = "/__tunekit/values";
+const CLIENT_ID = "/@tunekit/client";
+const RESOLVED_CLIENT_ID = "\0tunekit-client";
 
-// Runs in the page during dev. Imports "uipane" so it shares the app's PaneStore.
+// Runs in the page during dev. Imports "tunekit" so it shares the app's PaneStore.
 const CLIENT = `
-import { PaneStore } from "uipane";
+import { PaneStore } from "tunekit";
 
 const watched = new Map();
 let timer = 0;
@@ -61,7 +61,7 @@ PaneStore.subscribeGlobal(rewatch);
 rewatch();
 
 if (import.meta.hot) {
-  import.meta.hot.on("uipane:set", (data) => {
+  import.meta.hot.on("tunekit:set", (data) => {
     for (const [name, values] of Object.entries(data ?? {})) {
       const panel = PaneStore.getPanels().find((p) => p.name === name || p.id === name);
       if (panel && values && typeof values === "object") PaneStore.updateValues(panel.id, values);
@@ -72,19 +72,19 @@ if (import.meta.hot) {
 
 /**
  * Dev-only bridge between the panel and coding agents:
- * - the page's panel values are mirrored to `.uipane/values.json`;
- * - writing `{ "<panel>": { "<path>": value } }` to `.uipane/set.json` pushes
+ * - the page's panel values are mirrored to `.tunekit/values.json`;
+ * - writing `{ "<panel>": { "<path>": value } }` to `.tunekit/set.json` pushes
  *   those values into the open panel (the file is consumed and deleted).
  */
-export function uipane(options: UipaneVitePluginOptions = {}) {
+export function tunekit(options: TunekitVitePluginOptions = {}) {
   let dir = "";
 
   return {
-    name: "uipane",
+    name: "tunekit",
     apply: "serve" as const,
 
     configureServer(server: DevServer) {
-      dir = resolve(server.config.root, options.dir ?? ".uipane");
+      dir = resolve(server.config.root, options.dir ?? ".tunekit");
       mkdirSync(dir, { recursive: true });
       // The folder ignores itself, so projects don't need a .gitignore entry.
       const ignore = resolve(dir, ".gitignore");
@@ -110,7 +110,7 @@ export function uipane(options: UipaneVitePluginOptions = {}) {
         if (!existsSync(setFile)) return;
         try {
           const data = JSON.parse(readFileSync(setFile, "utf8"));
-          server.ws.send({ type: "custom", event: "uipane:set", data });
+          server.ws.send({ type: "custom", event: "tunekit:set", data });
           rmSync(setFile);
         } catch {
           // Mid-write or invalid JSON: the next change event retries.
@@ -136,4 +136,4 @@ export function uipane(options: UipaneVitePluginOptions = {}) {
   };
 }
 
-export default uipane;
+export default tunekit;

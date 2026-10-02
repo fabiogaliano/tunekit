@@ -36,7 +36,7 @@ export function initPane(options: InitPaneOptions = {}): () => void {
 
 function mount(options: InitPaneOptions): () => void {
   const host = document.createElement("div");
-  host.id = "uipane-root";
+  host.id = "tunekit-root";
   host.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:2147483645;pointer-events:none;";
   document.documentElement.appendChild(host);
 

@@ -227,7 +227,7 @@ export type ShortcutConfig = {
   interaction?: "scroll" | "drag" | "move" | "scroll-only";
 };
 
-/** Keep values (and presets) across reloads. `true` stores under `uipane:<name>`. */
+/** Keep values (and presets) across reloads. `true` stores under `tunekit:<name>`. */
 export type PersistOptions =
   | boolean
   | {

@@ -1018,7 +1018,7 @@ var PaneStoreClass = class {
 		if (!persist) return null;
 		const o = typeof persist === "object" ? persist : {};
 		return {
-			key: o.key ?? `uipane:${name}`,
+			key: o.key ?? `tunekit:${name}`,
 			storage: o.storage ?? "localStorage",
 			presets: o.presets ?? true
 		};
@@ -9178,7 +9178,7 @@ const WADA = {
 };
 //#endregion
 //#region src/color/saved.ts
-const KEY = "uipane:saved-colors";
+const KEY = "tunekit:saved-colors";
 const listeners = /* @__PURE__ */ new Set();
 function read() {
 	try {
@@ -10139,9 +10139,9 @@ function useShortcuts() {
 }
 //#endregion
 //#region src/ui/App.tsx
-const LS_KEY = "uipane-widget";
-const LS_LAYOUT_KEY = "uipane-layout";
-const LS_COLLAPSED_KEY = "uipane-collapsed";
+const LS_KEY = "tunekit-widget";
+const LS_LAYOUT_KEY = "tunekit-layout";
+const LS_COLLAPSED_KEY = "tunekit-collapsed";
 function loadLS(key) {
 	try {
 		const raw = localStorage.getItem(key);
@@ -10511,7 +10511,7 @@ function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }) {
 	if (collapsed) {
 		const rect = getCollapsedPosition(collapsed.corner, collapsed.orientation, collapsed.anchor);
 		const edge = getCollapsedEdge(collapsed.corner, collapsed.orientation);
-		const title = panels.length === 1 ? panels[0].name : "uipane";
+		const title = panels.length === 1 ? panels[0].name : "tunekit";
 		return /* @__PURE__ */ u(k$1, { children: [dockTarget !== null && allDocks().map((d) => /* @__PURE__ */ u("i", {
 			class: `up-dock-mark up-dock-mark-${d.edge} ${dockTarget === `${d.edge}-${d.anchor}` ? "up-dock-mark-on" : ""}`,
 			style: {
@@ -10563,7 +10563,7 @@ function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }) {
 					class: "up-header-left",
 					children: /* @__PURE__ */ u("span", {
 						class: "up-header-title",
-						children: panels.length === 1 ? currentPanel?.name ?? "uipane" : "uipane"
+						children: panels.length === 1 ? currentPanel?.name ?? "tunekit" : "tunekit"
 					})
 				}), panels.length > 1 && /* @__PURE__ */ u("div", {
 					class: "up-header-actions",
@@ -10636,7 +10636,7 @@ function initPane(options = {}) {
 }
 function mount(options) {
 	const host = document.createElement("div");
-	host.id = "uipane-root";
+	host.id = "tunekit-root";
 	host.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:2147483645;pointer-events:none;";
 	document.documentElement.appendChild(host);
 	const shadow = host.attachShadow({ mode: "open" });

@@ -1,155 +1,117 @@
-# uipane
+# tunekit
 
-Floating dev panel library — drag, corner-snap, edge-dock collapse, polished controls. Shadow DOM isolated.
+A floating dev panel for tuning React UIs by eye. Declare controls next to the component, get live values back, then copy what you dialed in straight into code.
 
-## Install
+tunekit started as a port of [dialkit](https://github.com/joshpuckett/dialkit) by [Josh Puckett](https://github.com/joshpuckett). The slider feel, presets, copy-for-AI flow and transition editors come from dialkit. tunekit adds a Shadow DOM panel you can drag, dock and resize, plus a few new controls. If you want a framework-agnostic option, try dialkit first.
 
 ```bash
-pnpm add uipane
+pnpm add tunekit   # or bun add / npm i
 ```
 
-## Usage
+## Quick start
 
 ```tsx
-import { usePane, PaneRoot } from "uipane";
+import { PaneRoot, usePane } from "tunekit";
 
-function App() {
-  const values = usePane("My Panel", {
-    opacity: { type: "slider", value: 0.5, min: 0, max: 1, step: 0.01 },
-    enabled: { type: "toggle", value: true },
-    mode: { type: "select", options: ["fast", "slow"], value: "fast" },
-    timing: {
-      type: "folder",
-      open: false,
-      children: {
-        delay: { type: "slider", value: 100, min: 0, max: 1000, step: 10 },
-      },
-    },
-    reset: { type: "action", label: "Reset All" },
-  }, {
-    onAction: (path) => {
-      if (path === "reset") console.log("reset!");
-    },
+function Card() {
+  const v = usePane("Card", {
+    radius: [12, 0, 48],          // slider: [value, min, max, step?]
+    shadow: true,                 // toggle
+    accent: "#6d5dfc",            // color picker
+    motion: { type: "spring", visualDuration: 0.4, bounce: 0.2 },
   });
 
-  // values.opacity: number
-  // values.enabled: boolean
-  // values.mode: string
-  // values.timing.delay: number
-  // (actions are excluded from return type)
+  return <div style={{ borderRadius: v.radius, background: v.accent }} />;
+}
 
+export function App() {
   return (
     <>
-      <PaneRoot />
-      <div style={{ opacity: values.opacity }}>
-        {values.enabled ? "ON" : "OFF"} — {values.mode}
-      </div>
+      <PaneRoot /> {/* mount once; renders nothing in production */}
+      <Card />
     </>
   );
 }
 ```
 
+Each `usePane` call adds a panel. Several panels share one window as tabs or stacked sections.
+
 ## Controls
 
-Explicit `{ type }` configs, or dialkit-style shorthand: `[value, min, max, step?]` or a bare number → slider, boolean → toggle, color string → color (hex/rgb/hsl/oklch), CSS gradient string → color with the Gradient tab, other string → text, plain object → folder (`_collapsed: true` starts it closed).
+Shorthand: a number or `[value, min, max, step?]` makes a slider, a boolean makes a toggle, a color or CSS gradient string makes a color picker, any other string makes a text field, and a plain object makes a folder (`_collapsed: true` starts it closed).
 
-| Control | Config | Resolved type |
-|---------|--------|---------------|
+| Control | Config | Value |
+|---|---|---|
 | Slider | `{ type: "slider", value, min, max, step? }` | `number` |
 | Toggle | `{ type: "toggle", value }` | `boolean` |
-| Action | `{ type: "action", label? }` | excluded |
 | Select | `{ type: "select", options, value? }` | `string` |
-| Color | `{ type: "color", value?, gradient?, contrast? }` | `string` (CSS color, or a CSS gradient with `gradient: true`) |
+| Color | `{ type: "color", value?, gradient?, contrast? }` | CSS color or gradient |
 | Text | `{ type: "text", value?, placeholder? }` | `string` |
 | Spring | `{ type: "spring", stiffness?, damping?, mass?, visualDuration?, bounce? }` | `TransitionValue` |
-| Easing | `{ type: "easing", duration, ease: [n,n,n,n] }` | `TransitionValue` |
-| Image | `{ type: "image", options?, value? }` | `string` (URL / data URL) |
-| Pad | `{ type: "pad", x?: [v,min,max,step?], y?, labels? }` | `{ x, y }` |
-| Slot | `{ type: "slot", label? }` + `<PaneSlot panel path>` | excluded |
-| Folder | `{ type: "folder", open?, children: {...} }` | recursive |
+| Easing | `{ type: "easing", duration, ease: [x1, y1, x2, y2] }` | `TransitionValue` |
+| Pad | `{ type: "pad", x?: [v, min, max], y?, labels? }` | `{ x, y }` |
+| Image | `{ type: "image", options?, value? }` | URL / data URL |
+| Action | `{ type: "action", label? }` | — (handle with `onAction`) |
+| Slot | `{ type: "slot" }` + `<PaneSlot panel path>` | — (renders your React) |
+| Folder | `{ type: "folder", open?, children }` | nested |
 
-**Color picker.** Tabs for Solid, Gradient (with `gradient: true`) and Library.
-- Solid: color area, hue/alpha, eyedropper (Chromium), classic hues, and a WCAG contrast badge against `contrast`, white or black (click to switch).
-- Number fields scrub: press and drag (the cursor locks in place; Shift ×10, Alt ×0.1), or click to type. The format button cycles HEX → OKLCH → RGB and sets the output format.
-- Gradient: linear/radial/conic, angle, blend space (sRGB/OKLab/OKLCH); click the bar to add a stop, drag to move, drag it off or press Delete to remove.
-- Saved colors and gradients are shared by every picker and kept in localStorage (`+` saves, × or right-click removes).
-- Library: traditional Japanese colors (日本の伝統色) and 和 gradients, Sanzo Wada's *Dictionary of Color Combinations* (348), and uiGradients (382, searchable).
+The color picker has Solid, Gradient and Library tabs: OKLCH/RGB/HEX fields you can scrub, an eyedropper, a WCAG contrast badge, saved swatches, and libraries of traditional Japanese colors, Sanzo Wada's *Dictionary of Color Combinations* and uiGradients.
 
 ## Options
 
 ```ts
 usePane("Card", config, {
-  id: "card",                       // stable id (default: name + useId)
-  persist: true,                    // values + presets in localStorage ("uipane:Card")
-  shortcuts: { radius: { key: "r", interaction: "drag" } }, // hold R and drag
+  persist: true,                                         // keep values + presets in localStorage
+  shortcuts: { radius: { key: "r", interaction: "drag" } }, // hold R and drag to scrub
   onAction: (path) => {},
 });
 
-const pane = usePaneController("Card", config); // { id, values, setValue, setValues, resetValues, getValues }
+// Read and write values from code
+const pane = usePaneController("Card", config); // { values, setValue, setValues, resetValues, ... }
 ```
 
-Shortcuts: hold the key and scroll (default), `drag`, or `move` to scrub a slider; press it to flip a toggle. `mode: "fine" | "coarse"` uses 1% / 10% of the range.
+`<PaneRoot layout="stack" />` starts with stacked sections instead of tabs. `productionEnabled` keeps the panel in production builds.
 
-Keyboard: sliders take arrows / Shift+arrows / PageUp/Down / Home/End, Enter edits the value; selects open with ↓/Enter and preview as you arrow through; ←/→ step a closed select.
+## The panel
 
-## Shell behavior
-
-- **Drag** header → free drag, corner-snap on release
-- **Edge-dock** → drag 35%+ off-screen → collapses to an edge handle
-- **Handle** → click it (or Enter) to open; drag it along any edge to re-dock, or release it mid-screen to open there
-- **Resize** → handles on edges opposite to docked corner
-- **Tabs / single page** → multiple `usePane()` calls share one panel, either as tabs or stacked as collapsible sections; the header button toggles between them. Set the initial layout with `<PaneRoot layout="stack" />` (or `initPane({ layout })`); the user's choice is remembered
-- **Presets** → save/load/delete named presets
-- **Copy** → copies values as AI prompt to clipboard
-- **Persist** → corner, size, layout and collapse state saved in localStorage; the size is fitted to the viewport on resize
-- **Production** → `<PaneRoot />` renders nothing in production builds (`NODE_ENV` / Vite `MODE`) unless you pass `productionEnabled`. Hooks keep returning their defaults.
+- Drag the header to move it. It snaps to the nearest corner.
+- Drag it mostly off-screen to dock it as a handle on the edge. Click the handle to open it again.
+- Resize from the free edges. Position, size and layout persist.
+- Save and load presets, or **Copy** to get a prompt listing the values you changed.
+- Sliders and selects work from the keyboard.
+- The panel renders in a Shadow DOM, so app styles never leak in or out.
 
 ## Coding agents
 
-`skills/uipane/SKILL.md` teaches a coding agent to add controls bound to real values and to apply values copied from the panel back into source. It ships in the package, so it is at `node_modules/uipane/skills/uipane/SKILL.md` once installed.
+The package ships a skill at `node_modules/tunekit/skills/tunekit/SKILL.md`. It teaches an agent to add controls bound to real values and to apply copied values back to source. Copy it to `.claude/skills/tunekit/` for Claude Code, or reference it from `AGENTS.md`.
 
-- **Claude Code:** copy the folder into the project (`.claude/skills/uipane/`) or into `~/.claude/skills/` for every project.
-- **Other agents** (Cursor, Codex…): reference the file from `AGENTS.md`, or paste it into the agent's rules.
-
-The panel's Copy button produces a prompt the skill knows how to apply. It lists only the values that changed, and the file that calls `usePane`.
-
-### Live bridge (Vite)
+For a live link without the clipboard, add the Vite plugin:
 
 ```ts
 // vite.config.ts
-import { uipane } from "uipane/vite";
+import { tunekit } from "tunekit/vite";
 
-export default defineConfig({ plugins: [react(), uipane()] });
+export default defineConfig({ plugins: [react(), tunekit()] });
 ```
 
-In dev, the panel's values are mirrored to `.uipane/values.json`: per panel, the source file, changed values and all values. The folder ignores itself in git. Agents read that file instead of the clipboard. Writing `{ "Card": { "radius": 30 } }` to `.uipane/set.json` pushes values into the open panel; the file is consumed. Option: `uipane({ dir: ".uipane" })`.
+In dev, panel values are mirrored to `.tunekit/values.json`. Writing `{ "Card": { "radius": 30 } }` to `.tunekit/set.json` pushes values into the open panel.
 
-## Programmatic access
+## Without React
 
 ```ts
-import { PaneStore } from "uipane";
+import { initPane, PaneStore } from "tunekit";
 
-PaneStore.updateValue(panelId, "opacity", 0.8);
-PaneStore.triggerAction(panelId, "reset");
-PaneStore.savePreset(panelId, "My Preset");
+const cleanup = initPane();
+PaneStore.registerPanel("my-panel", "Controls", { opacity: [0.5, 0, 1] });
+PaneStore.updateValue("my-panel", "opacity", 0.8);
 ```
 
-## Non-React usage
+## Thanks
 
-```ts
-import { initPane, PaneStore } from "uipane";
+- **[dialkit](https://github.com/joshpuckett/dialkit)** by Josh Puckett. tunekit is built on its ideas, and the XY pad, image picker, easing editor, keyboard helpers and shortcut handling are vendored from it (MIT, see `src/vendor/dialkit`). Thank you, Josh.
+- **[A Dictionary of Color Combinations](https://github.com/mattdesl/dictionary-of-colour-combinations)**: Sanzo Wada's palettes, digitized by Matt DesLauriers (MIT).
+- **[uiGradients](https://github.com/ghosh/uiGradients)** by Indrashish Ghosh (MIT).
 
-const cleanup = initPane(); // mounts shadow DOM panel
-PaneStore.registerPanel("my-panel", "Controls", { ... });
-```
+## License
 
-## Architecture
-
-- **Shadow DOM** — fully isolated, never breaks host app styles
-- **Preact** — renders inside shadow root (bundled, ~22KB gzip)
-- **React adapter** — `usePane()` hook via `useSyncExternalStore`
-- **Framework-agnostic core** — `PaneStore` works without React
-
-## Credits
-
-The XY pad, image picker, easing curve editor, keyboard helpers and shortcut handling are vendored from [dialkit](https://github.com/joshpuckett/dialkit) (MIT) in `src/vendor/dialkit`. Color data: Sanzo Wada's *A Dictionary of Color Combinations* via [mattdesl/dictionary-of-colour-combinations](https://github.com/mattdesl/dictionary-of-colour-combinations) (MIT) and [uiGradients](https://github.com/ghosh/uiGradients) (MIT).
+MIT
