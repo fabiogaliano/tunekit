@@ -1299,6 +1299,10 @@ export const STYLES = /* css */ `
 
 .up-cp-combos { display: flex; flex-direction: column; gap: 5px; }
 .up-cp-combo { display: flex; align-items: center; gap: 6px; }
+.up-cp-combo-name { width: 76px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--up-text-3); }
+.up-cp-credit { margin-top: 8px; font-size: 10px; color: var(--up-text-4); }
+.up-cp-credit a { color: inherit; }
+.up-cp-credit a:hover { color: var(--up-text-2); }
 .up-cp-combo-no { width: 22px; text-align: right; font: 10px ui-monospace, 'SF Mono', Menlo, monospace; color: var(--up-text-4); }
 .up-cp-combo-strip { flex: 1; display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
 .up-cp-combo-strip i { flex: 1; cursor: pointer; transition: flex 0.15s; }

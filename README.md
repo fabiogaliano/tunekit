@@ -55,16 +55,17 @@ Shorthand: a number or `[value, min, max, step?]` makes a slider, a boolean make
 | Slot | `{ type: "slot" }` + `<PaneSlot panel path>` | — (renders your React) |
 | Folder | `{ type: "folder", open?, children }` | nested |
 
-The color picker has Solid, Gradient and Library tabs: OKLCH/RGB/HEX fields you can scrub, an eyedropper, a WCAG contrast badge, saved swatches, and libraries of traditional Japanese colors, Sanzo Wada's *Dictionary of Color Combinations* and uiGradients.
+The color picker has Solid, Gradient and Library tabs: OKLCH/RGB/HEX fields you can scrub, an eyedropper, a WCAG contrast badge, saved swatches, and libraries of traditional Japanese colors, Sanzo Wada's *Dictionary of Color Combinations*, uiGradients, and curated palettes made with care: The Met and MoMA, artists, Mexican muralists, Wes Anderson, Studio Ghibli, national parks, the Pacific Northwest, chromotome, WebGradients and editor themes (Catppuccin, Rosé Pine, Nord, Solarized, Gruvbox, Dracula). The curated set loads the first time the Library opens.
 
 The same libraries are importable, for picking from them in code (a "random palette" button, say):
 
 ```ts
-import { japaneseGradients, wadaCombinations, uiGradients, japaneseColors, paletteGradient, paletteColors } from "tunekit/palettes";
+import { collections, japaneseGradients, wadaCombinations, uiGradients, japaneseColors, paletteGradient, paletteColors } from "tunekit/palettes";
 
 const p = wadaCombinations[Math.floor(Math.random() * wadaCombinations.length)]; // { name, colors }
 PaneStore.updateValue("my-panel", "palette", paletteGradient(p.colors)); // the CSS the picker writes
 paletteColors(value); // a color control's value back as its colours, in order
+collections; // every Library collection: { id, title, credit, source, palettes }
 ```
 
 ## Options
@@ -133,6 +134,7 @@ PaneStore.updateValue("my-panel", "opacity", 0.8);
 - **[dialkit](https://github.com/joshpuckett/dialkit)** by Josh Puckett. tunekit is built on its ideas, and the XY pad, image picker, easing editor, keyboard helpers and shortcut handling are vendored from it (MIT, see `src/vendor/dialkit`). Thank you, Josh.
 - **[A Dictionary of Color Combinations](https://github.com/mattdesl/dictionary-of-colour-combinations)**: Sanzo Wada's palettes, digitized by Matt DesLauriers (MIT).
 - **[uiGradients](https://github.com/ghosh/uiGradients)** by Indrashish Ghosh (MIT).
+- Curated palettes (fetched by `scripts/palettes.ts`): [MetBrewer](https://github.com/BlakeRMills/MetBrewer) (CC0) and [MoMAColors](https://github.com/BlakeRMills/MoMAColors) (MIT) by Blake Robert Mills, [lisa](https://github.com/tyluRp/lisa) by Tyler Littlefield (MIT), [MexBrewer](https://github.com/paezha/MexBrewer) by Antonio Páez (MIT), [wesanderson](https://github.com/karthik/wesanderson) by Karthik Ram (MIT), [ghibli](https://github.com/ewenme/ghibli) by Ewen Henderson (MIT), [NatParksPalettes](https://github.com/kevinsblake/NatParksPalettes) by Kevin S. Blake (MIT), [PNWColors](https://github.com/jakelawlor/PNWColors) by Jake Lawlor (CC0), [chromotome](https://github.com/kgolid/chromotome) by Kjetil Midtgarden Golid (MIT), [WebGradients](https://github.com/itmeo/webgradients) by itmeo (MIT), and the [Catppuccin](https://github.com/catppuccin/palette), [Rosé Pine](https://github.com/rose-pine/palette), [Nord](https://github.com/nordtheme/nord), [Solarized](https://github.com/altercation/solarized), [Gruvbox](https://github.com/morhetz/gruvbox) and [Dracula](https://github.com/dracula/dracula-theme) palettes (MIT).
 
 ## License
 

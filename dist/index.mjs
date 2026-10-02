@@ -1,4 +1,4 @@
-import { _ as rgbToHsv, a as WAIRO, b as toOklch, c as formatOf, d as gradientCss, f as gradientFromHexes, g as parseSolid, h as parseGradient, i as WAGRAD, l as formatSolid, m as isGradient, n as UIGRADIENTS, o as contrastGrade, p as hsvToRgb, r as CLASSIC, s as contrastRatio, t as WADA, u as fromOklch, v as sampleGradient, x as parseColor, y as toHex } from "./wada-BZX1hOIv.mjs";
+import { _ as rgbToHsv, a as WAIRO, b as toOklch, c as formatOf, d as gradientCss, f as gradientFromHexes, g as parseSolid, h as parseGradient, i as WAGRAD, l as formatSolid, m as isGradient, n as UIGRADIENTS, o as contrastGrade, p as hsvToRgb, r as CLASSIC, s as contrastRatio, t as WADA, u as fromOklch, v as sampleGradient, x as parseColor, y as toHex } from "./wada-CTQaV08E.mjs";
 import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
 /** Pixel coordinates within the visible grid; both axes must be within 8px. */
@@ -2432,6 +2432,10 @@ const STYLES = `
 
 .up-cp-combos { display: flex; flex-direction: column; gap: 5px; }
 .up-cp-combo { display: flex; align-items: center; gap: 6px; }
+.up-cp-combo-name { width: 76px; flex: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; color: var(--up-text-3); }
+.up-cp-credit { margin-top: 8px; font-size: 10px; color: var(--up-text-4); }
+.up-cp-credit a { color: inherit; }
+.up-cp-credit a:hover { color: var(--up-text-2); }
 .up-cp-combo-no { width: 22px; text-align: right; font: 10px ui-monospace, 'SF Mono', Menlo, monospace; color: var(--up-text-4); }
 .up-cp-combo-strip { flex: 1; display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
 .up-cp-combo-strip i { flex: 1; cursor: pointer; transition: flex 0.15s; }
@@ -6610,6 +6614,94 @@ function UiGradientsBody({ onGradient }) {
 		})
 	})] });
 }
+let curated = null;
+const loadCurated = () => curated ??= import("./curated-3iZeuxmB.mjs").then((n) => n.n).then((m) => m.CURATED);
+const GRADIENT_ONLY = new Set(["webgradients"]);
+const SEARCH_FROM = 40;
+function CuratedSections({ onColor, onGradient }) {
+	const [list, setList] = d(null);
+	y(() => {
+		let live = true;
+		loadCurated().then((c) => live && setList(c));
+		return () => {
+			live = false;
+		};
+	}, []);
+	if (!list) return null;
+	return /* @__PURE__ */ u(k$1, { children: list.filter((c) => onGradient || !GRADIENT_ONLY.has(c.id)).map((c) => /* @__PURE__ */ u(Section, {
+		title: c.title,
+		count: c.palettes.length,
+		children: () => /* @__PURE__ */ u(CuratedBody, {
+			collection: c,
+			onColor,
+			onGradient
+		})
+	}, c.id)) });
+}
+function CuratedBody({ collection, onColor, onGradient }) {
+	const [query, setQuery] = d("");
+	const q = query.trim().toLowerCase();
+	const shown = collection.palettes.filter(([name]) => name.toLowerCase().includes(q));
+	return /* @__PURE__ */ u(k$1, { children: [
+		collection.palettes.length > SEARCH_FROM && /* @__PURE__ */ u("input", {
+			class: "up-cp-search",
+			placeholder: `Search ${collection.palettes.length}…`,
+			value: query,
+			onInput: (e) => setQuery(e.target.value),
+			onKeyDown: (e) => e.stopPropagation()
+		}),
+		GRADIENT_ONLY.has(collection.id) && onGradient ? /* @__PURE__ */ u("div", {
+			class: "up-cp-chips up-cp-chips-wide",
+			children: shown.map(([name, colors]) => {
+				const css = gradientCss(gradientFromHexes(colors));
+				return /* @__PURE__ */ u(Chip, {
+					background: css,
+					title: name,
+					onPick: () => onGradient(css)
+				}, name);
+			})
+		}) : /* @__PURE__ */ u("div", {
+			class: "up-cp-combos",
+			children: shown.map(([name, colors]) => /* @__PURE__ */ u("div", {
+				class: "up-cp-combo",
+				children: [
+					/* @__PURE__ */ u("span", {
+						class: "up-cp-combo-name",
+						title: name,
+						children: name
+					}),
+					/* @__PURE__ */ u("div", {
+						class: "up-cp-combo-strip",
+						children: colors.map((hex, i) => /* @__PURE__ */ u("i", {
+							style: { background: hex },
+							title: hex,
+							onClick: () => onColor(hex)
+						}, i))
+					}),
+					onGradient && /* @__PURE__ */ u("button", {
+						type: "button",
+						title: "Use as gradient",
+						onClick: () => onGradient(gradientCss(gradientFromHexes(colors))),
+						children: "⇢"
+					})
+				]
+			}, name))
+		}),
+		/* @__PURE__ */ u("div", {
+			class: "up-cp-credit",
+			children: [
+				collection.credit,
+				" · ",
+				/* @__PURE__ */ u("a", {
+					href: collection.source.split(",")[0],
+					target: "_blank",
+					rel: "noreferrer",
+					children: "source"
+				})
+			]
+		})
+	] });
+}
 //#endregion
 //#region src/ui/color/ColorControl.tsx
 const POPOVER_WIDTH = 288;
@@ -6931,7 +7023,11 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 							onColor: pickColor,
 							onGradient: allowGradient ? pickGradient : void 0
 						}),
-						allowGradient && /* @__PURE__ */ u(UiGradientsSection, { onGradient: pickGradient })
+						allowGradient && /* @__PURE__ */ u(UiGradientsSection, { onGradient: pickGradient }),
+						/* @__PURE__ */ u(CuratedSections, {
+							onColor: pickColor,
+							onGradient: allowGradient ? pickGradient : void 0
+						})
 					] })
 				]
 			}), portalContainer)

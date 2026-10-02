@@ -1,4 +1,4 @@
-import { useState } from "preact/hooks";
+import { useEffect, useState } from "preact/hooks";
 import type { ComponentChildren } from "preact";
 import { CLASSIC, WAGRAD, WAIRO } from "../../color/data/japanese.ts";
 import { UIGRADIENTS } from "../../color/data/uigradients.ts";
@@ -242,6 +242,88 @@ function UiGradientsBody({ onGradient }: { onGradient: (css: string) => void }) 
           const css = gradientCss(gradientFromHexes(colors));
           return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} />;
         })}
+      </div>
+    </>
+  );
+}
+
+// ---------------------------------------------------------------- curated collections
+
+type Curated = typeof import("../../color/data/curated.ts").CURATED;
+// Loaded the first time a Library tab opens, so the ~50 KB of palettes stay out of a page that never browses them.
+let curated: Promise<Curated> | null = null;
+const loadCurated = () => (curated ??= import("../../color/data/curated.ts").then((m) => m.CURATED));
+
+// Gradient-only collections show as gradient chips; the rest as combination strips like Wada's.
+const GRADIENT_ONLY = new Set(["webgradients"]);
+const SEARCH_FROM = 40;
+
+export function CuratedSections({ onColor, onGradient }: Pick) {
+  const [list, setList] = useState<Curated | null>(null);
+  useEffect(() => {
+    let live = true;
+    void loadCurated().then((c) => live && setList(c));
+    return () => {
+      live = false;
+    };
+  }, []);
+  if (!list) return null;
+  return (
+    <>
+      {list
+        .filter((c) => onGradient || !GRADIENT_ONLY.has(c.id))
+        .map((c) => (
+          <Section key={c.id} title={c.title} count={c.palettes.length}>
+            {() => <CuratedBody collection={c} onColor={onColor} onGradient={onGradient} />}
+          </Section>
+        ))}
+    </>
+  );
+}
+
+function CuratedBody({ collection, onColor, onGradient }: Pick & { collection: Curated[number] }) {
+  const [query, setQuery] = useState("");
+  const q = query.trim().toLowerCase();
+  const shown = collection.palettes.filter(([name]) => name.toLowerCase().includes(q));
+  return (
+    <>
+      {collection.palettes.length > SEARCH_FROM && (
+        <input
+          class="up-cp-search"
+          placeholder={`Search ${collection.palettes.length}…`}
+          value={query}
+          onInput={(e) => setQuery((e.target as HTMLInputElement).value)}
+          onKeyDown={(e) => e.stopPropagation()}
+        />
+      )}
+      {GRADIENT_ONLY.has(collection.id) && onGradient ? (
+        <div class="up-cp-chips up-cp-chips-wide">
+          {shown.map(([name, colors]) => {
+            const css = gradientCss(gradientFromHexes(colors));
+            return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} />;
+          })}
+        </div>
+      ) : (
+        <div class="up-cp-combos">
+          {shown.map(([name, colors]) => (
+            <div key={name} class="up-cp-combo">
+              <span class="up-cp-combo-name" title={name}>{name}</span>
+              <div class="up-cp-combo-strip">
+                {colors.map((hex, i) => (
+                  <i key={i} style={{ background: hex }} title={hex} onClick={() => onColor(hex)} />
+                ))}
+              </div>
+              {onGradient && (
+                <button type="button" title="Use as gradient" onClick={() => onGradient(gradientCss(gradientFromHexes(colors)))}>
+                  ⇢
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+      <div class="up-cp-credit">
+        {collection.credit} · <a href={collection.source.split(",")[0]} target="_blank" rel="noreferrer">source</a>
       </div>
     </>
   );

@@ -18,6 +18,7 @@ import { containWheel } from "../containWheel.ts";
 import { ColorEditor, nextFormat } from "./ColorEditor.tsx";
 import { GradientEditor } from "./GradientEditor.tsx";
 import {
+  CuratedSections,
   JapaneseGradientsSection,
   SavedSection,
   TraditionalSection,
@@ -283,6 +284,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
                 <TraditionalSection selected={isGrad ? "" : solidHex} onColor={pickColor} defaultOpen={!allowGradient} />
                 <WadaSection onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} />
                 {allowGradient && <UiGradientsSection onGradient={pickGradient} />}
+                <CuratedSections onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} />
               </>
             )}
           </div>,
