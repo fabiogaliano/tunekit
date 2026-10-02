@@ -1,6 +1,6 @@
 {
   "name": "tunekit",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "Floating dev panel for tuning React UIs by eye — sliders, colors, springs and easings in a Shadow DOM panel you can drag, dock and copy back to code.",
   "license": "MIT",
   "author": "Fábio Galiano",

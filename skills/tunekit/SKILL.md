@@ -20,6 +20,8 @@ tunekit is a floating dev panel for React. You declare controls next to the comp
 
 Keep the set small and useful: 3–10 controls a component, named the way the user talks about the design ("radius", "shadow blur", "enter spring"), not the CSS property.
 
+More than ~10 controls, or groups the user names separately ("the letters", "the colours")? Make one panel per group, not one panel with folders. With two or more panels the user gets the tabs/single-sheet toggle. Give every panel the same `source`. Presets are per panel, so if a profile should span all groups, save/load/delete it by name in each.
+
 ## API
 
 ```tsx
