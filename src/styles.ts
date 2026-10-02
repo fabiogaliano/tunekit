@@ -1108,7 +1108,8 @@ export const STYLES = /* css */ `
   --up-accent: #8b7bff;
 }
 
-.up-cp-swatch {
+/* Doubled with dialkit's class: its own swatch rule comes later in the sheet and paints from a variable tunekit never sets. */
+.dialkit-color-swatch.up-cp-swatch {
   background: var(--up-swatch), repeating-conic-gradient(#aaa 0% 25%, #eee 0% 50%) 0 / 8px 8px;
 }
 
