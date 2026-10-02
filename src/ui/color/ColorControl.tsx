@@ -40,6 +40,24 @@ type ColorControlProps = {
 };
 
 const POPOVER_WIDTH = 288;
+const MIN_SIZE = { w: 260, h: 240 };
+// One size for every color picker: dragged bigger once, the Library stays roomy wherever it's opened.
+const SIZE_KEY = "tunekit-color-popover";
+type Size = { w: number; h: number };
+const loadSize = (): Size | null => {
+  try {
+    const s = JSON.parse(localStorage.getItem(SIZE_KEY) ?? "null") as Size | null;
+    return s && s.w > 0 && s.h > 0 ? s : null;
+  } catch {
+    return null;
+  }
+};
+const saveSize = (s: Size | null) => {
+  try {
+    if (s) localStorage.setItem(SIZE_KEY, JSON.stringify(s));
+    else localStorage.removeItem(SIZE_KEY);
+  } catch {}
+};
 const FALLBACK: Hsva = { h: 0, s: 0, v: 0, a: 1 };
 
 const TAB_ICONS: Record<Tab, preact.JSX.Element> = {
@@ -66,6 +84,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
   const swatchRef = useRef<HTMLButtonElement>(null);
   const popRef = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
+  const [size, setSize] = useState<Size | null>(loadSize);
 
   const [solid, setSolid] = useState<Hsva>(() => (isGradient(value) ? null : parseSolid(value)) ?? FALLBACK);
   const [grad, setGrad] = useState<Gradient>(() => parseGradient(value) ?? gradientFromHexes(["#0F2540", "#8B81C3", "#FEDFE1"]));
@@ -103,15 +122,47 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
     emit(gradientCss(g));
   };
 
+  // Hovering the Library previews; this is the value to go back to when the pointer leaves without picking.
+  const held = useRef<string | null>(null);
+  const show = (v: string) => {
+    if (isGradient(v)) {
+      const g = parseGradient(v);
+      if (g) {
+        setGrad(g);
+        setSel(0);
+      }
+    } else {
+      const c = parseSolid(v, solid.h);
+      if (c) setSolid(c);
+    }
+    emit(v);
+  };
+  const preview = (v: string | null) => {
+    if (v === null) {
+      const back = held.current;
+      held.current = null;
+      if (back !== null && back !== value) show(back);
+      return;
+    }
+    held.current ??= value;
+    if (v !== value) show(v);
+  };
+  // close() is made once; it reaches the current preview through this
+  const previewRef = useRef(preview);
+  previewRef.current = preview;
+
+  // A pick from the Library stays in the Library, so several can be tried in a row.
   const pickColor = (hex: string) => {
+    held.current = null;
     emitSolid({ ...(parseSolid(hex, solid.h) ?? FALLBACK), a: 1 });
-    setTab("solid");
+    if (tab !== "library") setTab("solid");
   };
   const pickGradient = (css: string) => {
     const g = parseGradient(css);
     if (!g) return;
+    held.current = null;
     emitGradient(g, 0);
-    setTab("gradient");
+    if (tab !== "library") setTab("gradient");
   };
   const pickSaved = (v: string) => (isGradient(v) ? pickGradient(v) : pickColor(v));
 
@@ -128,6 +179,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
   };
 
   const close = useCallback((refocus = false) => {
+    previewRef.current(null);
     setOpen(false);
     if (refocus) swatchRef.current?.focus({ preventScroll: true });
   }, []);
@@ -139,10 +191,11 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
     const update = () => {
       const pop = popRef.current;
       if (!pop) return;
+      const inner = pop.firstElementChild as HTMLElement | null;
       const p = getDropdownPosition(row, portalContainer, {
-        dropdownHeight: pop.scrollHeight + 2,
-        width: POPOVER_WIDTH,
-        maxHeight: 640,
+        dropdownHeight: size ? size.h : (inner?.scrollHeight ?? 0) + 2,
+        width: size?.w ?? POPOVER_WIDTH,
+        maxHeight: size?.h ?? 640,
         preferSide: true,
         fixed: true,
         gap: 8,
@@ -152,8 +205,13 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
         top: `${p.top}px`,
         width: `${p.width}px`,
         maxHeight: `${p.maxHeight}px`,
+        height: size ? `${Math.min(size.h, p.maxHeight)}px` : "",
         transformOrigin: p.above ? "bottom" : "top",
       });
+      // the grip sits on the corner away from the panel, so dragging it outward always grows the picker
+      const shell = row.closest(".up-shell")?.getBoundingClientRect();
+      pop.dataset.side = shell && p.left + p.width <= shell.left + 1 ? "before" : "after";
+      pop.style.setProperty("--up-cp-sect-h", size ? `${Math.max(272, size.h - 330)}px` : "");
     };
     const stop = observeDropdownPosition(row, update, () => popRef.current);
     const outside = (e: PointerEvent) => {
@@ -171,7 +229,32 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
       document.removeEventListener("pointerdown", outside, true);
       window.removeEventListener("keydown", onKey);
     };
-  }, [open, portalContainer, close]);
+  }, [open, portalContainer, close, size]);
+
+  const resize = (e: PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const pop = popRef.current!;
+    const from = pop.getBoundingClientRect();
+    const sign = pop.dataset.side === "before" ? -1 : 1;
+    const x0 = e.clientX;
+    const y0 = e.clientY;
+    let next: Size | null = null;
+    const move = (ev: PointerEvent) => {
+      next = {
+        w: Math.round(Math.min(window.innerWidth - 16, Math.max(MIN_SIZE.w, from.width + sign * (ev.clientX - x0)))),
+        h: Math.round(Math.min(window.innerHeight - 16, Math.max(MIN_SIZE.h, from.height + (ev.clientY - y0)))),
+      };
+      setSize(next);
+    };
+    const up = () => {
+      document.removeEventListener("pointermove", move);
+      document.removeEventListener("pointerup", up);
+      if (next) saveSize(next);
+    };
+    document.addEventListener("pointermove", move);
+    document.addEventListener("pointerup", up);
+  };
 
   const isGrad = isGradient(value);
   const solidHex = toHex({ ...solid, a: 1 });
@@ -182,6 +265,9 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
     <div ref={rowRef} class="dialkit-color-control" data-open={open ? "true" : undefined}>
       <span class="dialkit-color-label">{label}</span>
       <div class="dialkit-color-inputs">
+        {isGrad && draft === null ? (
+          <CopyValue value={value} />
+        ) : (
         <input
           class="dialkit-color-value"
           spellcheck={false}
@@ -208,6 +294,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
             }
           }}
         />
+        )}
         <button
           ref={swatchRef}
           type="button"
@@ -239,6 +326,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
               e.stopPropagation();
             }}
           >
+            <div class="up-cp-scroll">
             <div class="up-cp-tabs" role="tablist">
               {tabs.map((t) => (
                 <button
@@ -279,17 +367,61 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
             )}
 
             {tab === "library" && (
-              <>
-                {allowGradient && <JapaneseGradientsSection onGradient={pickGradient} defaultOpen />}
-                <TraditionalSection selected={isGrad ? "" : solidHex} onColor={pickColor} defaultOpen={!allowGradient} />
-                <WadaSection onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} />
-                {allowGradient && <UiGradientsSection onGradient={pickGradient} />}
-                <CuratedSections onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} />
-              </>
+              <div class="up-cp-library" onMouseLeave={() => preview(null)}>
+                {allowGradient && <JapaneseGradientsSection onGradient={pickGradient} onPreview={preview} defaultOpen />}
+                <TraditionalSection selected={isGrad ? "" : solidHex} onColor={pickColor} onPreview={preview} defaultOpen={!allowGradient} />
+                <WadaSection onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} onPreview={preview} />
+                {allowGradient && <UiGradientsSection onGradient={pickGradient} onPreview={preview} />}
+                <CuratedSections onColor={pickColor} onGradient={allowGradient ? pickGradient : undefined} onPreview={preview} />
+              </div>
             )}
+            </div>
+            <div
+              class="up-cp-grip"
+              title="Drag to resize · double-click to reset"
+              onPointerDown={resize}
+              onDblClick={() => {
+                setSize(null);
+                saveSize(null);
+              }}
+            >
+              <svg viewBox="0 0 10 10"><path d="M9 3L3 9M9 6.5L6.5 9" /></svg>
+            </div>
           </div>,
           portalContainer,
         )}
     </div>
+  );
+}
+
+// A gradient's CSS is too long to read in a row; it shows what it is, and a click copies the whole thing.
+function CopyValue({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  const timer = useRef(0);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const g = parseGradient(value);
+  const summary = g ? `${g.type} · ${g.stops.length} stops` : "gradient";
+  return (
+    <button
+      type="button"
+      class="up-cp-copy"
+      data-copied={copied ? "true" : undefined}
+      title={`${value}\n\nClick to copy`}
+      onClick={() => {
+        void navigator.clipboard.writeText(value).then(() => {
+          setCopied(true);
+          clearTimeout(timer.current);
+          timer.current = window.setTimeout(() => setCopied(false), 1400);
+        });
+      }}
+    >
+      <span key={copied ? "copied" : "summary"} class="up-cp-copy-text">
+        {copied ? "copied" : summary}
+      </span>
+      <span class="up-cp-copy-icon" aria-hidden="true">
+        <svg class="up-cp-copy-a" viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2" /><path d="M5 15V6a2 2 0 0 1 2-2h9" /></svg>
+        <svg class="up-cp-copy-b" viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5" /></svg>
+      </span>
+    </button>
   );
 }

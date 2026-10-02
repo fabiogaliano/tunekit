@@ -165,7 +165,7 @@ export function ColorEditor({ color, onChange, format, onFormat, classic, contra
   );
 }
 
-export function Dot({ hex, title, selected, onPick }: { hex: string; title: string; selected: string; onPick: (hex: string) => void }) {
+export function Dot({ hex, title, selected, onPick, onPreview }: { hex: string; title: string; selected: string; onPick: (hex: string) => void; onPreview?: (hex: string) => void }) {
   const on = hex.toLowerCase() === selected.toLowerCase();
   const light = toOklch(parseSolid(hex)!)[0] > 0.9;
   return (
@@ -175,6 +175,7 @@ export function Dot({ hex, title, selected, onPick }: { hex: string; title: stri
       style={{ "--c": hex }}
       title={title}
       onClick={() => onPick(hex)}
+      onMouseEnter={onPreview && (() => onPreview(hex))}
     />
   );
 }

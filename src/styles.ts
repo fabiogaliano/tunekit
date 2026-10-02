@@ -1120,11 +1120,7 @@ export const STYLES = /* css */ `
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: none;
+  overflow: hidden;
   color: var(--up-text-2);
   background: var(--up-bg);
   border: 1px solid var(--up-border-hover);
@@ -1134,7 +1130,41 @@ export const STYLES = /* css */ `
   user-select: none;
   animation: up-cp-enter 0.16s ease-out;
 }
-.up-cp-pop::-webkit-scrollbar { display: none; }
+.up-cp-copy {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; margin-right: -2px;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  color: var(--up-text-3); font: 12px ui-monospace, 'SF Mono', Menlo, monospace; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.up-cp-copy:hover { background: var(--up-surface-hover); color: var(--up-text-1); }
+.up-cp-copy[data-copied] { color: #7ee2a8; }
+.up-cp-copy-text { overflow: hidden; text-overflow: ellipsis; animation: up-cp-copy-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes up-cp-copy-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.up-cp-copy-icon { position: relative; width: 12px; height: 12px; flex: none; }
+.up-cp-copy-icon svg {
+  position: absolute; inset: 0; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+  transition: opacity 0.18s, transform 0.28s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+.up-cp-copy-b { opacity: 0; transform: scale(0.4) rotate(-20deg); }
+.up-cp-copy[data-copied] .up-cp-copy-a { opacity: 0; transform: scale(0.4) rotate(20deg); }
+.up-cp-copy[data-copied] .up-cp-copy-b { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .up-cp-copy-text { animation: none; }
+  .up-cp-copy-icon svg { transition: none; }
+}
+.up-cp-scroll {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 10px;
+  overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+}
+.up-cp-scroll::-webkit-scrollbar { display: none; }
+.up-cp-library { display: contents; }
+.up-cp-grip {
+  position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; z-index: 3;
+  display: flex; align-items: center; justify-content: center; cursor: nwse-resize; color: var(--up-text-4); opacity: 0.6;
+}
+.up-cp-pop[data-side="before"] .up-cp-grip { right: auto; left: 2px; cursor: nesw-resize; transform: scaleX(-1); }
+.up-cp-grip:hover { opacity: 1; color: var(--up-text-2); }
+.up-cp-grip svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 @keyframes up-cp-enter { from { opacity: 0; transform: translateY(3px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 .up-cp-pop svg { flex-shrink: 0; }
@@ -1266,7 +1296,7 @@ export const STYLES = /* css */ `
 .up-cp-sect-head svg { width: 12px; height: 12px; margin-left: auto; fill: none; stroke: var(--up-text-4); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
 .up-cp-sect-open svg { transform: rotate(90deg); }
 /* The body scrolls, which clips overflow; padding with a matching negative margin leaves room for hover scale. */
-.up-cp-sect-body { max-height: 272px; margin: -6px; padding: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+.up-cp-sect-body { max-height: var(--up-cp-sect-h, 272px); margin: -6px; padding: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
 .up-cp-sect-free { max-height: none; overflow: visible; }
 .up-cp-sect-body[hidden] { display: none; }
 .up-cp-search {
@@ -1274,8 +1304,9 @@ export const STYLES = /* css */ `
   background: var(--up-surface); color: var(--up-text-1); font: 12px system-ui, sans-serif;
 }
 
-.up-cp-chips { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
-.up-cp-chips-wide { grid-template-columns: repeat(4, 1fr); }
+/* A wider picker fits more per row rather than bigger chips. */
+.up-cp-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(26px, 1fr)); gap: 5px; }
+.up-cp-chips-wide { grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); }
 .up-cp-chip {
   position: relative; aspect-ratio: 1; padding: 0; border: 0; border-radius: 7px; cursor: pointer;
   background: var(--up-checker); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); transition: transform 0.12s;

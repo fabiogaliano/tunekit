@@ -48,9 +48,9 @@ export function Section({ title, jp, count, defaultOpen = false, free, children 
   );
 }
 
-type ChipProps = { background: string; title: string; label?: string; onPick: () => void; onRemove?: () => void };
+type ChipProps = { background: string; title: string; label?: string; onPick: () => void; onPreview?: () => void; onRemove?: () => void };
 
-function Chip({ background, title, label, onPick, onRemove }: ChipProps) {
+function Chip({ background, title, label, onPick, onPreview, onRemove }: ChipProps) {
   return (
     <div
       class="up-cp-chip"
@@ -58,6 +58,7 @@ function Chip({ background, title, label, onPick, onRemove }: ChipProps) {
       tabIndex={0}
       title={title}
       onClick={onPick}
+      onMouseEnter={onPreview}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -93,7 +94,9 @@ function Chip({ background, title, label, onPick, onRemove }: ChipProps) {
 
 // ---------------------------------------------------------------- sections
 
-type Pick = { onColor: (hex: string) => void; onGradient?: (css: string) => void };
+/** onPreview shows a value while it's hovered; null puts back what was there. */
+type Preview = { onPreview?: (value: string | null) => void };
+type Pick = { onColor: (hex: string) => void; onGradient?: (css: string) => void } & Preview;
 
 export function SavedSection({ kind, current, onPick }: { kind: "solid" | "gradient"; current: string; onPick: (value: string) => void }) {
   const items = useSavedColors().filter((i) => i.kind === kind);
@@ -150,18 +153,18 @@ const BY_HUE = (() => {
   return { grid, neutrals: neutrals.map(([, hex]) => hex) };
 })();
 
-export function TraditionalSection({ selected, onColor, defaultOpen }: { selected: string; onColor: (hex: string) => void; defaultOpen?: boolean }) {
+export function TraditionalSection({ selected, onColor, onPreview, defaultOpen }: { selected: string; onColor: (hex: string) => void; defaultOpen?: boolean } & Preview) {
   return (
     <Section title="Traditional colors" jp="日本の伝統色" count={WAIRO.length} defaultOpen={defaultOpen}>
       {() => (
         <>
           <div class="up-cp-dots">
-            {BY_HUE.grid.map((hex, i) => (hex ? <Dot key={hex} hex={hex} title={hex} selected={selected} onPick={onColor} /> : <span key={`gap-${i}`} />))}
+            {BY_HUE.grid.map((hex, i) => (hex ? <Dot key={hex} hex={hex} title={hex} selected={selected} onPick={onColor} onPreview={onPreview} /> : <span key={`gap-${i}`} />))}
           </div>
           <div class="up-cp-dots-label">Neutrals</div>
           <div class="up-cp-dots">
             {BY_HUE.neutrals.map((hex) => (
-              <Dot key={hex} hex={hex} title={hex} selected={selected} onPick={onColor} />
+              <Dot key={hex} hex={hex} title={hex} selected={selected} onPick={onColor} onPreview={onPreview} />
             ))}
           </div>
         </>
@@ -172,13 +175,13 @@ export function TraditionalSection({ selected, onColor, defaultOpen }: { selecte
 
 const WAGRAD_CSS = () => WAGRAD.map(([name, kanji, hexes]) => [name, kanji, gradientCss(gradientFromHexes(hexes))] as const);
 
-export function JapaneseGradientsSection({ onGradient, defaultOpen }: { onGradient: (css: string) => void; defaultOpen?: boolean }) {
+export function JapaneseGradientsSection({ onGradient, onPreview, defaultOpen }: { onGradient: (css: string) => void; defaultOpen?: boolean } & Preview) {
   return (
     <Section title="Japanese gradients" jp="和" count={WAGRAD.length} defaultOpen={defaultOpen}>
       {() => (
         <div class="up-cp-chips up-cp-chips-wide">
           {WAGRAD_CSS().map(([name, kanji, css]) => (
-            <Chip key={name + kanji} background={css} title={`${name} ${kanji}`} label={kanji} onPick={() => onGradient(css)} />
+            <Chip key={name + kanji} background={css} title={`${name} ${kanji}`} label={kanji} onPick={() => onGradient(css)} onPreview={onPreview && (() => onPreview(css))} />
           ))}
         </div>
       )}
@@ -186,7 +189,7 @@ export function JapaneseGradientsSection({ onGradient, defaultOpen }: { onGradie
   );
 }
 
-export function WadaSection({ onColor, onGradient }: Pick) {
+export function WadaSection({ onColor, onGradient, onPreview }: Pick) {
   return (
     <Section title="Wada combinations" jp="配色事典" count={WADA.k.length}>
       {() => (
@@ -197,7 +200,7 @@ export function WadaSection({ onColor, onGradient }: Pick) {
               <div class="up-cp-combo-strip">
                 {indexes.map((i) => {
                   const [name, hex] = WADA.c[i]!;
-                  return <i key={i} style={{ background: hex }} title={`${name} · ${hex}`} onClick={() => onColor(hex)} />;
+                  return <i key={i} style={{ background: hex }} title={`${name} · ${hex}`} onClick={() => onColor(hex)} onMouseEnter={() => onPreview?.(hex)} />;
                 })}
               </div>
               {onGradient && (
@@ -205,6 +208,7 @@ export function WadaSection({ onColor, onGradient }: Pick) {
                   type="button"
                   title="Use as gradient"
                   onClick={() => onGradient(gradientCss(gradientFromHexes(indexes.map((i) => WADA.c[i]![1]))))}
+                  onMouseEnter={() => onPreview?.(gradientCss(gradientFromHexes(indexes.map((i) => WADA.c[i]![1]))))}
                 >
                   ⇢
                 </button>
@@ -217,15 +221,15 @@ export function WadaSection({ onColor, onGradient }: Pick) {
   );
 }
 
-export function UiGradientsSection({ onGradient }: { onGradient: (css: string) => void }) {
+export function UiGradientsSection({ onGradient, onPreview }: { onGradient: (css: string) => void } & Preview) {
   return (
     <Section title="uiGradients" count={UIGRADIENTS.length}>
-      {() => <UiGradientsBody onGradient={onGradient} />}
+      {() => <UiGradientsBody onGradient={onGradient} onPreview={onPreview} />}
     </Section>
   );
 }
 
-function UiGradientsBody({ onGradient }: { onGradient: (css: string) => void }) {
+function UiGradientsBody({ onGradient, onPreview }: { onGradient: (css: string) => void } & Preview) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   return (
@@ -240,7 +244,7 @@ function UiGradientsBody({ onGradient }: { onGradient: (css: string) => void }) 
       <div class="up-cp-chips up-cp-chips-wide">
         {UIGRADIENTS.filter(([name]) => name.toLowerCase().includes(q)).map(([name, colors]) => {
           const css = gradientCss(gradientFromHexes(colors));
-          return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} />;
+          return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} onPreview={onPreview && (() => onPreview(css))} />;
         })}
       </div>
     </>
@@ -258,7 +262,7 @@ const loadCurated = () => (curated ??= import("../../color/data/curated.ts").the
 const GRADIENT_ONLY = new Set(["webgradients"]);
 const SEARCH_FROM = 40;
 
-export function CuratedSections({ onColor, onGradient }: Pick) {
+export function CuratedSections({ onColor, onGradient, onPreview }: Pick) {
   const [list, setList] = useState<Curated | null>(null);
   useEffect(() => {
     let live = true;
@@ -274,14 +278,14 @@ export function CuratedSections({ onColor, onGradient }: Pick) {
         .filter((c) => onGradient || !GRADIENT_ONLY.has(c.id))
         .map((c) => (
           <Section key={c.id} title={c.title} count={c.palettes.length}>
-            {() => <CuratedBody collection={c} onColor={onColor} onGradient={onGradient} />}
+            {() => <CuratedBody collection={c} onColor={onColor} onGradient={onGradient} onPreview={onPreview} />}
           </Section>
         ))}
     </>
   );
 }
 
-function CuratedBody({ collection, onColor, onGradient }: Pick & { collection: Curated[number] }) {
+function CuratedBody({ collection, onColor, onGradient, onPreview }: Pick & { collection: Curated[number] }) {
   const [query, setQuery] = useState("");
   const q = query.trim().toLowerCase();
   const shown = collection.palettes.filter(([name]) => name.toLowerCase().includes(q));
@@ -300,7 +304,7 @@ function CuratedBody({ collection, onColor, onGradient }: Pick & { collection: C
         <div class="up-cp-chips up-cp-chips-wide">
           {shown.map(([name, colors]) => {
             const css = gradientCss(gradientFromHexes(colors));
-            return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} />;
+            return <Chip key={name} background={css} title={name} onPick={() => onGradient(css)} onPreview={onPreview && (() => onPreview(css))} />;
           })}
         </div>
       ) : (
@@ -310,11 +314,16 @@ function CuratedBody({ collection, onColor, onGradient }: Pick & { collection: C
               <span class="up-cp-combo-name" title={name}>{name}</span>
               <div class="up-cp-combo-strip">
                 {colors.map((hex, i) => (
-                  <i key={i} style={{ background: hex }} title={hex} onClick={() => onColor(hex)} />
+                  <i key={i} style={{ background: hex }} title={hex} onClick={() => onColor(hex)} onMouseEnter={() => onPreview?.(hex)} />
                 ))}
               </div>
               {onGradient && (
-                <button type="button" title="Use as gradient" onClick={() => onGradient(gradientCss(gradientFromHexes(colors)))}>
+                <button
+                  type="button"
+                  title="Use as gradient"
+                  onClick={() => onGradient(gradientCss(gradientFromHexes(colors)))}
+                  onMouseEnter={() => onPreview?.(gradientCss(gradientFromHexes(colors)))}
+                >
                   ⇢
                 </button>
               )}

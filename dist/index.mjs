@@ -2253,11 +2253,7 @@ const STYLES = `
   z-index: 2147483647;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 10px;
-  overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: none;
+  overflow: hidden;
   color: var(--up-text-2);
   background: var(--up-bg);
   border: 1px solid var(--up-border-hover);
@@ -2267,7 +2263,41 @@ const STYLES = `
   user-select: none;
   animation: up-cp-enter 0.16s ease-out;
 }
-.up-cp-pop::-webkit-scrollbar { display: none; }
+.up-cp-copy {
+  display: inline-flex; align-items: center; gap: 6px; min-width: 0; padding: 3px 6px; margin-right: -2px;
+  border: 0; border-radius: 6px; background: none; cursor: pointer;
+  color: var(--up-text-3); font: 12px ui-monospace, 'SF Mono', Menlo, monospace; white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.up-cp-copy:hover { background: var(--up-surface-hover); color: var(--up-text-1); }
+.up-cp-copy[data-copied] { color: #7ee2a8; }
+.up-cp-copy-text { overflow: hidden; text-overflow: ellipsis; animation: up-cp-copy-in 0.22s cubic-bezier(0.2, 0.8, 0.2, 1); }
+@keyframes up-cp-copy-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+.up-cp-copy-icon { position: relative; width: 12px; height: 12px; flex: none; }
+.up-cp-copy-icon svg {
+  position: absolute; inset: 0; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round;
+  transition: opacity 0.18s, transform 0.28s cubic-bezier(0.3, 1.5, 0.5, 1);
+}
+.up-cp-copy-b { opacity: 0; transform: scale(0.4) rotate(-20deg); }
+.up-cp-copy[data-copied] .up-cp-copy-a { opacity: 0; transform: scale(0.4) rotate(20deg); }
+.up-cp-copy[data-copied] .up-cp-copy-b { opacity: 1; transform: none; }
+@media (prefers-reduced-motion: reduce) {
+  .up-cp-copy-text { animation: none; }
+  .up-cp-copy-icon svg { transition: none; }
+}
+.up-cp-scroll {
+  flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; padding: 10px;
+  overflow-y: auto; overscroll-behavior: contain; scrollbar-width: none;
+}
+.up-cp-scroll::-webkit-scrollbar { display: none; }
+.up-cp-library { display: contents; }
+.up-cp-grip {
+  position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; z-index: 3;
+  display: flex; align-items: center; justify-content: center; cursor: nwse-resize; color: var(--up-text-4); opacity: 0.6;
+}
+.up-cp-pop[data-side="before"] .up-cp-grip { right: auto; left: 2px; cursor: nesw-resize; transform: scaleX(-1); }
+.up-cp-grip:hover { opacity: 1; color: var(--up-text-2); }
+.up-cp-grip svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; }
 @keyframes up-cp-enter { from { opacity: 0; transform: translateY(3px) scale(0.98); } to { opacity: 1; transform: none; } }
 
 .up-cp-pop svg { flex-shrink: 0; }
@@ -2399,7 +2429,7 @@ const STYLES = `
 .up-cp-sect-head svg { width: 12px; height: 12px; margin-left: auto; fill: none; stroke: var(--up-text-4); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
 .up-cp-sect-open svg { transform: rotate(90deg); }
 /* The body scrolls, which clips overflow; padding with a matching negative margin leaves room for hover scale. */
-.up-cp-sect-body { max-height: 272px; margin: -6px; padding: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+.up-cp-sect-body { max-height: var(--up-cp-sect-h, 272px); margin: -6px; padding: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
 .up-cp-sect-free { max-height: none; overflow: visible; }
 .up-cp-sect-body[hidden] { display: none; }
 .up-cp-search {
@@ -2407,8 +2437,9 @@ const STYLES = `
   background: var(--up-surface); color: var(--up-text-1); font: 12px system-ui, sans-serif;
 }
 
-.up-cp-chips { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
-.up-cp-chips-wide { grid-template-columns: repeat(4, 1fr); }
+/* A wider picker fits more per row rather than bigger chips. */
+.up-cp-chips { display: grid; grid-template-columns: repeat(auto-fill, minmax(26px, 1fr)); gap: 5px; }
+.up-cp-chips-wide { grid-template-columns: repeat(auto-fill, minmax(58px, 1fr)); }
 .up-cp-chip {
   position: relative; aspect-ratio: 1; padding: 0; border: 0; border-radius: 7px; cursor: pointer;
   background: var(--up-checker); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); transition: transform 0.12s;
@@ -6133,7 +6164,7 @@ function ColorEditor({ color, onChange, format, onFormat, classic, contrastWith 
 		]
 	});
 }
-function Dot({ hex, title, selected, onPick }) {
+function Dot({ hex, title, selected, onPick, onPreview }) {
 	const on = hex.toLowerCase() === selected.toLowerCase();
 	const light = toOklch(parseSolid(hex))[0] > .9;
 	return /* @__PURE__ */ u("button", {
@@ -6141,7 +6172,8 @@ function Dot({ hex, title, selected, onPick }) {
 		class: `up-cp-dot ${on ? "up-cp-dot-on" : ""} ${light ? "up-cp-dot-light" : ""}`,
 		style: { "--c": hex },
 		title,
-		onClick: () => onPick(hex)
+		onClick: () => onPick(hex),
+		onMouseEnter: onPreview && (() => onPreview(hex))
 	});
 }
 function ContrastBadge({ color, backgrounds }) {
@@ -6407,13 +6439,14 @@ function Section({ title, jp, count, defaultOpen = false, free, children }) {
 		})]
 	});
 }
-function Chip({ background, title, label, onPick, onRemove }) {
+function Chip({ background, title, label, onPick, onPreview, onRemove }) {
 	return /* @__PURE__ */ u("div", {
 		class: "up-cp-chip",
 		role: "button",
 		tabIndex: 0,
 		title,
 		onClick: onPick,
+		onMouseEnter: onPreview,
 		onKeyDown: (e) => {
 			if (e.key === "Enter" || e.key === " ") {
 				e.preventDefault();
@@ -6497,7 +6530,7 @@ const BY_HUE = (() => {
 		neutrals: neutrals.map(([, hex]) => hex)
 	};
 })();
-function TraditionalSection({ selected, onColor, defaultOpen }) {
+function TraditionalSection({ selected, onColor, onPreview, defaultOpen }) {
 	return /* @__PURE__ */ u(Section, {
 		title: "Traditional colors",
 		jp: "日本の伝統色",
@@ -6510,7 +6543,8 @@ function TraditionalSection({ selected, onColor, defaultOpen }) {
 					hex,
 					title: hex,
 					selected,
-					onPick: onColor
+					onPick: onColor,
+					onPreview
 				}, hex) : /* @__PURE__ */ u("span", {}, `gap-${i}`))
 			}),
 			/* @__PURE__ */ u("div", {
@@ -6523,7 +6557,8 @@ function TraditionalSection({ selected, onColor, defaultOpen }) {
 					hex,
 					title: hex,
 					selected,
-					onPick: onColor
+					onPick: onColor,
+					onPreview
 				}, hex))
 			})
 		] })
@@ -6534,7 +6569,7 @@ const WAGRAD_CSS = () => WAGRAD.map(([name, kanji, hexes]) => [
 	kanji,
 	gradientCss(gradientFromHexes(hexes))
 ]);
-function JapaneseGradientsSection({ onGradient, defaultOpen }) {
+function JapaneseGradientsSection({ onGradient, onPreview, defaultOpen }) {
 	return /* @__PURE__ */ u(Section, {
 		title: "Japanese gradients",
 		jp: "和",
@@ -6546,12 +6581,13 @@ function JapaneseGradientsSection({ onGradient, defaultOpen }) {
 				background: css,
 				title: `${name} ${kanji}`,
 				label: kanji,
-				onPick: () => onGradient(css)
+				onPick: () => onGradient(css),
+				onPreview: onPreview && (() => onPreview(css))
 			}, name + kanji))
 		})
 	});
 }
-function WadaSection({ onColor, onGradient }) {
+function WadaSection({ onColor, onGradient, onPreview }) {
 	return /* @__PURE__ */ u(Section, {
 		title: "Wada combinations",
 		jp: "配色事典",
@@ -6572,7 +6608,8 @@ function WadaSection({ onColor, onGradient }) {
 							return /* @__PURE__ */ u("i", {
 								style: { background: hex },
 								title: `${name} · ${hex}`,
-								onClick: () => onColor(hex)
+								onClick: () => onColor(hex),
+								onMouseEnter: () => onPreview?.(hex)
 							}, i);
 						})
 					}),
@@ -6580,6 +6617,7 @@ function WadaSection({ onColor, onGradient }) {
 						type: "button",
 						title: "Use as gradient",
 						onClick: () => onGradient(gradientCss(gradientFromHexes(indexes.map((i) => WADA.c[i][1])))),
+						onMouseEnter: () => onPreview?.(gradientCss(gradientFromHexes(indexes.map((i) => WADA.c[i][1])))),
 						children: "⇢"
 					})
 				]
@@ -6587,14 +6625,17 @@ function WadaSection({ onColor, onGradient }) {
 		})
 	});
 }
-function UiGradientsSection({ onGradient }) {
+function UiGradientsSection({ onGradient, onPreview }) {
 	return /* @__PURE__ */ u(Section, {
 		title: "uiGradients",
 		count: UIGRADIENTS.length,
-		children: () => /* @__PURE__ */ u(UiGradientsBody, { onGradient })
+		children: () => /* @__PURE__ */ u(UiGradientsBody, {
+			onGradient,
+			onPreview
+		})
 	});
 }
-function UiGradientsBody({ onGradient }) {
+function UiGradientsBody({ onGradient, onPreview }) {
 	const [query, setQuery] = d("");
 	const q = query.trim().toLowerCase();
 	return /* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u("input", {
@@ -6610,7 +6651,8 @@ function UiGradientsBody({ onGradient }) {
 			return /* @__PURE__ */ u(Chip, {
 				background: css,
 				title: name,
-				onPick: () => onGradient(css)
+				onPick: () => onGradient(css),
+				onPreview: onPreview && (() => onPreview(css))
 			}, name);
 		})
 	})] });
@@ -6619,7 +6661,7 @@ let curated = null;
 const loadCurated = () => curated ??= import("./curated-3iZeuxmB.mjs").then((n) => n.n).then((m) => m.CURATED);
 const GRADIENT_ONLY = new Set(["webgradients"]);
 const SEARCH_FROM = 40;
-function CuratedSections({ onColor, onGradient }) {
+function CuratedSections({ onColor, onGradient, onPreview }) {
 	const [list, setList] = d(null);
 	y(() => {
 		let live = true;
@@ -6635,11 +6677,12 @@ function CuratedSections({ onColor, onGradient }) {
 		children: () => /* @__PURE__ */ u(CuratedBody, {
 			collection: c,
 			onColor,
-			onGradient
+			onGradient,
+			onPreview
 		})
 	}, c.id)) });
 }
-function CuratedBody({ collection, onColor, onGradient }) {
+function CuratedBody({ collection, onColor, onGradient, onPreview }) {
 	const [query, setQuery] = d("");
 	const q = query.trim().toLowerCase();
 	const shown = collection.palettes.filter(([name]) => name.toLowerCase().includes(q));
@@ -6658,7 +6701,8 @@ function CuratedBody({ collection, onColor, onGradient }) {
 				return /* @__PURE__ */ u(Chip, {
 					background: css,
 					title: name,
-					onPick: () => onGradient(css)
+					onPick: () => onGradient(css),
+					onPreview: onPreview && (() => onPreview(css))
 				}, name);
 			})
 		}) : /* @__PURE__ */ u("div", {
@@ -6676,13 +6720,15 @@ function CuratedBody({ collection, onColor, onGradient }) {
 						children: colors.map((hex, i) => /* @__PURE__ */ u("i", {
 							style: { background: hex },
 							title: hex,
-							onClick: () => onColor(hex)
+							onClick: () => onColor(hex),
+							onMouseEnter: () => onPreview?.(hex)
 						}, i))
 					}),
 					onGradient && /* @__PURE__ */ u("button", {
 						type: "button",
 						title: "Use as gradient",
 						onClick: () => onGradient(gradientCss(gradientFromHexes(colors))),
+						onMouseEnter: () => onPreview?.(gradientCss(gradientFromHexes(colors))),
 						children: "⇢"
 					})
 				]
@@ -6706,6 +6752,25 @@ function CuratedBody({ collection, onColor, onGradient }) {
 //#endregion
 //#region src/ui/color/ColorControl.tsx
 const POPOVER_WIDTH = 288;
+const MIN_SIZE = {
+	w: 260,
+	h: 240
+};
+const SIZE_KEY = "tunekit-color-popover";
+const loadSize = () => {
+	try {
+		const s = JSON.parse(localStorage.getItem(SIZE_KEY) ?? "null");
+		return s && s.w > 0 && s.h > 0 ? s : null;
+	} catch {
+		return null;
+	}
+};
+const saveSize = (s) => {
+	try {
+		if (s) localStorage.setItem(SIZE_KEY, JSON.stringify(s));
+		else localStorage.removeItem(SIZE_KEY);
+	} catch {}
+};
 const FALLBACK = {
 	h: 0,
 	s: 0,
@@ -6780,6 +6845,7 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 	const swatchRef = A$1(null);
 	const popRef = A$1(null);
 	const [open, setOpen] = d(false);
+	const [size, setSize] = d(loadSize);
 	const [solid, setSolid] = d(() => (isGradient(value) ? null : parseSolid(value)) ?? FALLBACK);
 	const [grad, setGrad] = d(() => parseGradient(value) ?? gradientFromHexes([
 		"#0F2540",
@@ -6816,18 +6882,46 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 		setSel(nextSel);
 		emit(gradientCss(g));
 	};
+	const held = A$1(null);
+	const show = (v) => {
+		if (isGradient(v)) {
+			const g = parseGradient(v);
+			if (g) {
+				setGrad(g);
+				setSel(0);
+			}
+		} else {
+			const c = parseSolid(v, solid.h);
+			if (c) setSolid(c);
+		}
+		emit(v);
+	};
+	const preview = (v) => {
+		if (v === null) {
+			const back = held.current;
+			held.current = null;
+			if (back !== null && back !== value) show(back);
+			return;
+		}
+		held.current ??= value;
+		if (v !== value) show(v);
+	};
+	const previewRef = A$1(preview);
+	previewRef.current = preview;
 	const pickColor = (hex) => {
+		held.current = null;
 		emitSolid({
 			...parseSolid(hex, solid.h) ?? FALLBACK,
 			a: 1
 		});
-		setTab("solid");
+		if (tab !== "library") setTab("solid");
 	};
 	const pickGradient = (css) => {
 		const g = parseGradient(css);
 		if (!g) return;
+		held.current = null;
 		emitGradient(g, 0);
-		setTab("gradient");
+		if (tab !== "library") setTab("gradient");
 	};
 	const pickSaved = (v) => isGradient(v) ? pickGradient(v) : pickColor(v);
 	const switchTab = (next) => {
@@ -6841,6 +6935,7 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 		if (!isGradient(value)) emitSolid(solid, f);
 	};
 	const close = q$1((refocus = false) => {
+		previewRef.current(null);
 		setOpen(false);
 		if (refocus) swatchRef.current?.focus({ preventScroll: true });
 	}, []);
@@ -6850,10 +6945,11 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 		const update = () => {
 			const pop = popRef.current;
 			if (!pop) return;
+			const inner = pop.firstElementChild;
 			const p = getDropdownPosition(row, portalContainer, {
-				dropdownHeight: pop.scrollHeight + 2,
-				width: POPOVER_WIDTH,
-				maxHeight: 640,
+				dropdownHeight: size ? size.h : (inner?.scrollHeight ?? 0) + 2,
+				width: size?.w ?? POPOVER_WIDTH,
+				maxHeight: size?.h ?? 640,
 				preferSide: true,
 				fixed: true,
 				gap: 8
@@ -6863,8 +6959,12 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 				top: `${p.top}px`,
 				width: `${p.width}px`,
 				maxHeight: `${p.maxHeight}px`,
+				height: size ? `${Math.min(size.h, p.maxHeight)}px` : "",
 				transformOrigin: p.above ? "bottom" : "top"
 			});
+			const shell = row.closest(".up-shell")?.getBoundingClientRect();
+			pop.dataset.side = shell && p.left + p.width <= shell.left + 1 ? "before" : "after";
+			pop.style.setProperty("--up-cp-sect-h", size ? `${Math.max(272, size.h - 330)}px` : "");
 		};
 		const stop = observeDropdownPosition(row, update, () => popRef.current);
 		const outside = (e) => {
@@ -6884,8 +6984,33 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 	}, [
 		open,
 		portalContainer,
-		close
+		close,
+		size
 	]);
+	const resize = (e) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const pop = popRef.current;
+		const from = pop.getBoundingClientRect();
+		const sign = pop.dataset.side === "before" ? -1 : 1;
+		const x0 = e.clientX;
+		const y0 = e.clientY;
+		let next = null;
+		const move = (ev) => {
+			next = {
+				w: Math.round(Math.min(window.innerWidth - 16, Math.max(MIN_SIZE.w, from.width + sign * (ev.clientX - x0)))),
+				h: Math.round(Math.min(window.innerHeight - 16, Math.max(MIN_SIZE.h, from.height + (ev.clientY - y0))))
+			};
+			setSize(next);
+		};
+		const up = () => {
+			document.removeEventListener("pointermove", move);
+			document.removeEventListener("pointerup", up);
+			if (next) saveSize(next);
+		};
+		document.addEventListener("pointermove", move);
+		document.addEventListener("pointerup", up);
+	};
 	const isGrad = isGradient(value);
 	const solidHex = toHex({
 		...solid,
@@ -6912,7 +7037,7 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 			}),
 			/* @__PURE__ */ u("div", {
 				class: "dialkit-color-inputs",
-				children: [/* @__PURE__ */ u("input", {
+				children: [isGrad && draft === null ? /* @__PURE__ */ u(CopyValue, { value }) : /* @__PURE__ */ u("input", {
 					class: "dialkit-color-value",
 					spellcheck: false,
 					"aria-label": `${label} color value`,
@@ -6962,77 +7087,145 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 					}
 					e.stopPropagation();
 				},
-				children: [
-					/* @__PURE__ */ u("div", {
-						class: "up-cp-tabs",
-						role: "tablist",
-						children: tabs.map((t) => /* @__PURE__ */ u("button", {
-							type: "button",
-							role: "tab",
-							"aria-selected": tab === t,
-							class: `up-cp-tab ${tab === t ? "up-cp-tab-on" : ""}`,
-							onClick: () => switchTab(t),
-							children: [TAB_ICONS[t], t[0].toUpperCase() + t.slice(1)]
-						}, t))
-					}),
-					tab === "solid" && /* @__PURE__ */ u(k$1, { children: [
-						/* @__PURE__ */ u(ColorEditor, {
-							color: solid,
-							onChange: (c) => emitSolid(c),
-							format,
-							onFormat: cycleFormat,
-							classic: true,
-							contrastWith
+				children: [/* @__PURE__ */ u("div", {
+					class: "up-cp-scroll",
+					children: [
+						/* @__PURE__ */ u("div", {
+							class: "up-cp-tabs",
+							role: "tablist",
+							children: tabs.map((t) => /* @__PURE__ */ u("button", {
+								type: "button",
+								role: "tab",
+								"aria-selected": tab === t,
+								class: `up-cp-tab ${tab === t ? "up-cp-tab-on" : ""}`,
+								onClick: () => switchTab(t),
+								children: [TAB_ICONS[t], t[0].toUpperCase() + t.slice(1)]
+							}, t))
 						}),
-						/* @__PURE__ */ u(SavedSection, {
-							kind: "solid",
-							current: formatSolid(solid, format),
-							onPick: pickSaved
-						}),
-						/* @__PURE__ */ u(TraditionalSection, {
-							selected: isGrad ? "" : solidHex,
-							onColor: pickColor,
-							defaultOpen: true
+						tab === "solid" && /* @__PURE__ */ u(k$1, { children: [
+							/* @__PURE__ */ u(ColorEditor, {
+								color: solid,
+								onChange: (c) => emitSolid(c),
+								format,
+								onFormat: cycleFormat,
+								classic: true,
+								contrastWith
+							}),
+							/* @__PURE__ */ u(SavedSection, {
+								kind: "solid",
+								current: formatSolid(solid, format),
+								onPick: pickSaved
+							}),
+							/* @__PURE__ */ u(TraditionalSection, {
+								selected: isGrad ? "" : solidHex,
+								onColor: pickColor,
+								defaultOpen: true
+							})
+						] }),
+						tab === "gradient" && /* @__PURE__ */ u(k$1, { children: [
+							/* @__PURE__ */ u(GradientEditor, {
+								gradient: grad,
+								selected: sel,
+								onChange: emitGradient,
+								format,
+								onFormat: () => setFormat(nextFormat(format))
+							}),
+							/* @__PURE__ */ u(SavedSection, {
+								kind: "gradient",
+								current: gradientCss(grad),
+								onPick: pickSaved
+							}),
+							/* @__PURE__ */ u(JapaneseGradientsSection, { onGradient: pickGradient })
+						] }),
+						tab === "library" && /* @__PURE__ */ u("div", {
+							class: "up-cp-library",
+							onMouseLeave: () => preview(null),
+							children: [
+								allowGradient && /* @__PURE__ */ u(JapaneseGradientsSection, {
+									onGradient: pickGradient,
+									onPreview: preview,
+									defaultOpen: true
+								}),
+								/* @__PURE__ */ u(TraditionalSection, {
+									selected: isGrad ? "" : solidHex,
+									onColor: pickColor,
+									onPreview: preview,
+									defaultOpen: !allowGradient
+								}),
+								/* @__PURE__ */ u(WadaSection, {
+									onColor: pickColor,
+									onGradient: allowGradient ? pickGradient : void 0,
+									onPreview: preview
+								}),
+								allowGradient && /* @__PURE__ */ u(UiGradientsSection, {
+									onGradient: pickGradient,
+									onPreview: preview
+								}),
+								/* @__PURE__ */ u(CuratedSections, {
+									onColor: pickColor,
+									onGradient: allowGradient ? pickGradient : void 0,
+									onPreview: preview
+								})
+							]
 						})
-					] }),
-					tab === "gradient" && /* @__PURE__ */ u(k$1, { children: [
-						/* @__PURE__ */ u(GradientEditor, {
-							gradient: grad,
-							selected: sel,
-							onChange: emitGradient,
-							format,
-							onFormat: () => setFormat(nextFormat(format))
-						}),
-						/* @__PURE__ */ u(SavedSection, {
-							kind: "gradient",
-							current: gradientCss(grad),
-							onPick: pickSaved
-						}),
-						/* @__PURE__ */ u(JapaneseGradientsSection, { onGradient: pickGradient })
-					] }),
-					tab === "library" && /* @__PURE__ */ u(k$1, { children: [
-						allowGradient && /* @__PURE__ */ u(JapaneseGradientsSection, {
-							onGradient: pickGradient,
-							defaultOpen: true
-						}),
-						/* @__PURE__ */ u(TraditionalSection, {
-							selected: isGrad ? "" : solidHex,
-							onColor: pickColor,
-							defaultOpen: !allowGradient
-						}),
-						/* @__PURE__ */ u(WadaSection, {
-							onColor: pickColor,
-							onGradient: allowGradient ? pickGradient : void 0
-						}),
-						allowGradient && /* @__PURE__ */ u(UiGradientsSection, { onGradient: pickGradient }),
-						/* @__PURE__ */ u(CuratedSections, {
-							onColor: pickColor,
-							onGradient: allowGradient ? pickGradient : void 0
-						})
-					] })
-				]
+					]
+				}), /* @__PURE__ */ u("div", {
+					class: "up-cp-grip",
+					title: "Drag to resize · double-click to reset",
+					onPointerDown: resize,
+					onDblClick: () => {
+						setSize(null);
+						saveSize(null);
+					},
+					children: /* @__PURE__ */ u("svg", {
+						viewBox: "0 0 10 10",
+						children: /* @__PURE__ */ u("path", { d: "M9 3L3 9M9 6.5L6.5 9" })
+					})
+				})]
 			}), portalContainer)
 		]
+	});
+}
+function CopyValue({ value }) {
+	const [copied, setCopied] = d(false);
+	const timer = A$1(0);
+	y(() => () => clearTimeout(timer.current), []);
+	const g = parseGradient(value);
+	const summary = g ? `${g.type} · ${g.stops.length} stops` : "gradient";
+	return /* @__PURE__ */ u("button", {
+		type: "button",
+		class: "up-cp-copy",
+		"data-copied": copied ? "true" : void 0,
+		title: `${value}\n\nClick to copy`,
+		onClick: () => {
+			navigator.clipboard.writeText(value).then(() => {
+				setCopied(true);
+				clearTimeout(timer.current);
+				timer.current = window.setTimeout(() => setCopied(false), 1400);
+			});
+		},
+		children: [/* @__PURE__ */ u("span", {
+			class: "up-cp-copy-text",
+			children: copied ? "copied" : summary
+		}, copied ? "copied" : "summary"), /* @__PURE__ */ u("span", {
+			class: "up-cp-copy-icon",
+			"aria-hidden": "true",
+			children: [/* @__PURE__ */ u("svg", {
+				class: "up-cp-copy-a",
+				viewBox: "0 0 24 24",
+				children: [/* @__PURE__ */ u("rect", {
+					x: "9",
+					y: "9",
+					width: "11",
+					height: "11",
+					rx: "2"
+				}), /* @__PURE__ */ u("path", { d: "M5 15V6a2 2 0 0 1 2-2h9" })]
+			}), /* @__PURE__ */ u("svg", {
+				class: "up-cp-copy-b",
+				viewBox: "0 0 24 24",
+				children: /* @__PURE__ */ u("path", { d: "M5 12.5l4.5 4.5L19 7.5" })
+			})]
+		})]
 	});
 }
 //#endregion
