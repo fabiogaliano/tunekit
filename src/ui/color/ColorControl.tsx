@@ -14,6 +14,7 @@ import {
   type Hsva,
 } from "../../color/model.ts";
 import { getDropdownPosition, observeDropdownPosition } from "../../vendor/dialkit/dropdown-position.ts";
+import { containWheel } from "../containWheel.ts";
 import { ColorEditor, nextFormat } from "./ColorEditor.tsx";
 import { GradientEditor } from "./GradientEditor.tsx";
 import {
@@ -225,6 +226,7 @@ export function ColorControl({ label, value, onChange, portalContainer, gradient
           <div
             ref={popRef}
             class="up-cp-pop"
+            onWheel={containWheel}
             role="dialog"
             aria-label={`${label} color picker`}
             style={{ position: "fixed" }}

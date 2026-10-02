@@ -62,6 +62,7 @@ The color picker has Solid, Gradient and Library tabs: OKLCH/RGB/HEX fields you 
 ```ts
 usePane("Card", config, {
   persist: true,                                         // keep values + presets in localStorage
+  presets: [{ name: "Soft", values: { radius: 24 } }],    // presets from files, see below
   shortcuts: { radius: { key: "r", interaction: "drag" } }, // hold R and drag to scrub
   onAction: (path) => {},
 });
@@ -74,7 +75,7 @@ const pane = usePaneController("Card", config); // { values, setValue, setValues
 
 ## The panel
 
-- Drag the header to move it. It snaps to the nearest corner.
+- Drag the header to move it. It snaps to the nearest corner or the middle of the top or bottom edge.
 - Drag it mostly off-screen to dock it as a handle on the edge. Click the handle to open it again.
 - Resize from the free edges. Position, size and layout persist.
 - Save and load presets, or **Copy** to get a prompt listing the values you changed.
@@ -95,6 +96,17 @@ export default defineConfig({ plugins: [react(), tunekit()] });
 ```
 
 In dev, panel values are mirrored to `.tunekit/values.json`. Writing `{ "Card": { "radius": 30 } }` to `.tunekit/set.json` pushes values into the open panel.
+
+### Presets as files
+
+With the plugin running, **+** saves the preset to `presets/<name>.json` next to the component instead of localStorage, and edits made while that preset is selected are written back to it. Load them with the `presets` option:
+
+```tsx
+const presets = Object.values(import.meta.glob("./presets/*.json", { eager: true, import: "default" }));
+const v = usePane("Card", config, { presets });
+```
+
+File presets show up in the same dropdown, can't be deleted from the panel (delete the file), and also load in production builds.
 
 ## Without React
 

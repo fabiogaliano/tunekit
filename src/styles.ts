@@ -65,6 +65,7 @@ export const STYLES = /* css */ `
 .up-content {
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   flex: 1;
   padding: 0 12px 12px;
   scrollbar-width: none;

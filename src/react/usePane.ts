@@ -16,6 +16,7 @@ import type {
   ResolvedValues,
   ShortcutConfig,
   PersistOptions,
+  PresetFile,
 } from "../types.ts";
 
 export type UsePaneOptions = {
@@ -23,6 +24,8 @@ export type UsePaneOptions = {
   id?: string;
   onAction?: (path: string) => void;
   persist?: PersistOptions;
+  /** Presets kept as files, e.g. `Object.values(import.meta.glob("./presets/*.json", { eager: true, import: "default" }))`. */
+  presets?: PresetFile[];
   /** Keyboard/scroll shortcuts by dot-path, e.g. `{ "blur.radius": { key: "b" } }`. */
   shortcuts?: Record<string, ShortcutConfig>;
 };
@@ -61,6 +64,7 @@ export function usePaneController<const T extends PaneConfig>(
   const [source] = useState(callerModule);
   const panelOptions: PanelOptions = {
     persist: options?.persist,
+    presets: options?.presets,
     shortcuts: options?.shortcuts,
     source,
   };

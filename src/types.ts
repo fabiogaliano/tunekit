@@ -236,8 +236,25 @@ export type PersistOptions =
       presets?: boolean;
     };
 
+/** A preset kept as a file in the repo, e.g. `presets/soft.json` next to the component. */
+export type PresetFile = {
+  name: string;
+  values: Record<string, PaneValue>;
+};
+
+/** Receives file presets to write back to disk. The tunekit Vite plugin installs one in dev. */
+export type PresetWriter = (write: {
+  panelName: string;
+  /** Module that declared the panel; files land in a `presets/` folder beside it. */
+  source: string | undefined;
+  slug: string;
+  preset: PresetFile;
+}) => void;
+
 export type PanelOptions = {
   persist?: PersistOptions;
+  /** Presets loaded from files. Listed before local ones and never stored in localStorage. */
+  presets?: PresetFile[];
   shortcuts?: Record<string, ShortcutConfig>;
   /** Module that declared the panel, so Copy and the agent bridge can point at it. */
   source?: string;
@@ -269,16 +286,21 @@ export type Preset = {
   id: string;
   name: string;
   values: Record<string, PaneValue>;
+  /** Backed by a file in the repo rather than localStorage. */
+  file?: boolean;
 };
 
 // ---------------------------------------------------------------------------
 // Shell types
 // ---------------------------------------------------------------------------
 
+/** Where the expanded panel rests. The centers are snap targets only; docking always uses a true corner. */
 export type Corner =
   | "top-left"
+  | "top-center"
   | "top-right"
   | "bottom-left"
+  | "bottom-center"
   | "bottom-right";
 
 export type CollapseOrientation = "horizontal" | "vertical";

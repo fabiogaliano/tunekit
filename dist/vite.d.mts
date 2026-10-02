@@ -29,6 +29,8 @@ type DevServer = {
 };
 /**
  * Dev-only bridge between the panel and coding agents:
+ * - presets saved in the panel are written to `presets/<name>.json` beside the
+ *   module that called `usePane`; load them back with the `presets` option;
  * - the page's panel values are mirrored to `.tunekit/values.json`;
  * - writing `{ "<panel>": { "<path>": value } }` to `.tunekit/set.json` pushes
  *   those values into the open panel (the file is consumed and deleted).

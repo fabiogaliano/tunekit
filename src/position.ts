@@ -27,66 +27,41 @@ export function calculatePosition(
   const ww = window.innerWidth;
   const wh = window.innerHeight;
   const right = ww - width - SAFE_AREA;
+  const center = (ww - width) / 2;
   const bottom = wh - height - SAFE_AREA;
 
   switch (corner) {
     case "top-left":
       return { x: SAFE_AREA, y: SAFE_AREA };
+    case "top-center":
+      return { x: center, y: SAFE_AREA };
     case "top-right":
       return { x: right, y: SAFE_AREA };
     case "bottom-left":
       return { x: SAFE_AREA, y: bottom };
+    case "bottom-center":
+      return { x: center, y: bottom };
     case "bottom-right":
       return { x: right, y: bottom };
   }
 }
 
-export function getBestCorner(
-  mouseX: number,
-  mouseY: number,
-  initialMouseX: number,
-  initialMouseY: number,
-  threshold = 60,
-): Corner {
-  const dx = mouseX - initialMouseX;
-  const dy = mouseY - initialMouseY;
-  const cx = window.innerWidth / 2;
-  const cy = window.innerHeight / 2;
+const SNAP_CORNERS: Corner[] = [
+  "top-left",
+  "top-center",
+  "top-right",
+  "bottom-left",
+  "bottom-center",
+  "bottom-right",
+];
 
-  const movingRight = dx > threshold;
-  const movingLeft = dx < -threshold;
-  const movingDown = dy > threshold;
-  const movingUp = dy < -threshold;
-
-  if (movingRight || movingLeft) {
-    const isBottom = mouseY > cy;
-    return movingRight
-      ? isBottom
-        ? "bottom-right"
-        : "top-right"
-      : isBottom
-        ? "bottom-left"
-        : "top-left";
-  }
-
-  if (movingDown || movingUp) {
-    const isRight = mouseX > cx;
-    return movingDown
-      ? isRight
-        ? "bottom-right"
-        : "bottom-left"
-      : isRight
-        ? "top-right"
-        : "top-left";
-  }
-
-  return mouseX > cx
-    ? mouseY > cy
-      ? "bottom-right"
-      : "top-right"
-    : mouseY > cy
-      ? "bottom-left"
-      : "top-left";
+/** Snap target nearest to where the panel was dropped. */
+export function getSnapCorner(x: number, y: number, width: number, height: number): Corner {
+  const distance = (c: Corner) => {
+    const p = calculatePosition(c, width, height);
+    return (p.x - x) ** 2 + (p.y - y) ** 2;
+  };
+  return SNAP_CORNERS.reduce((best, c) => (distance(c) < distance(best) ? c : best));
 }
 
 export function getCollapsedEdge(

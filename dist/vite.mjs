@@ -1,7 +1,9 @@
 import { existsSync, mkdirSync, readFileSync, rmSync, watch, writeFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { dirname, isAbsolute, relative, resolve } from "node:path";
 //#region src/vite.ts
 const ENDPOINT = "/__tunekit/values";
+const PRESETS_ENDPOINT = "/__tunekit/presets";
+const SLUG = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const CLIENT_ID = "/@tunekit/client";
 const RESOLVED_CLIENT_ID = "\0tunekit-client";
 const CLIENT = `
@@ -40,6 +42,16 @@ function rewatch() {
 PaneStore.subscribeGlobal(rewatch);
 rewatch();
 
+PaneStore.setPresetWriter((write) => {
+  if (!write.source) {
+    console.warn("[tunekit] can't save preset for " + write.panelName + ": unknown source module");
+    return;
+  }
+  fetch(${JSON.stringify(PRESETS_ENDPOINT)}, { method: "POST", body: JSON.stringify(write) })
+    .then((res) => res.ok || res.text().then((t) => console.warn("[tunekit] preset not saved:", t)))
+    .catch(() => {});
+});
+
 if (import.meta.hot) {
   import.meta.hot.on("tunekit:set", (data) => {
     for (const [name, values] of Object.entries(data ?? {})) {
@@ -51,6 +63,8 @@ if (import.meta.hot) {
 `;
 /**
 * Dev-only bridge between the panel and coding agents:
+* - presets saved in the panel are written to `presets/<name>.json` beside the
+*   module that called `usePane`; load them back with the `presets` option;
 * - the page's panel values are mirrored to `.tunekit/values.json`;
 * - writing `{ "<panel>": { "<path>": value } }` to `.tunekit/set.json` pushes
 *   those values into the open panel (the file is consumed and deleted).
@@ -77,6 +91,31 @@ function tunekit(options = {}) {
 						res.statusCode = 400;
 					}
 					res.end();
+				});
+			});
+			server.middlewares.use(PRESETS_ENDPOINT, (req, res, next) => {
+				if (req.method !== "POST") return next();
+				let body = "";
+				req.on("data", (chunk) => body += String(chunk));
+				req.on("end", () => {
+					try {
+						const { source, slug, preset } = JSON.parse(body);
+						const root = server.config.root;
+						const module = resolve(root, source);
+						const rel = relative(root, module);
+						if (!SLUG.test(slug) || rel.startsWith("..") || isAbsolute(rel) || rel.split(/[\\/]/).includes("node_modules")) throw new Error("refusing to write outside the project");
+						const presetsDir = resolve(dirname(module), "presets");
+						mkdirSync(presetsDir, { recursive: true });
+						writeFileSync(resolve(presetsDir, slug + ".json"), JSON.stringify({
+							name: preset.name,
+							values: preset.values
+						}, null, 2) + "\n");
+						res.statusCode = 204;
+						res.end();
+					} catch (error) {
+						res.statusCode = 400;
+						res.end(String(error));
+					}
 				});
 			});
 			const setFile = resolve(dir, "set.json");

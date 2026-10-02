@@ -750,6 +750,11 @@ function attachShortcuts(controls, shortcuts) {
 		children: c.children && attachShortcuts(c.children, shortcuts)
 	}));
 }
+const FILE_PREFIX = "file:";
+const FILE_WRITE_DELAY = 400;
+function slugify(name) {
+	return name.toLowerCase().normalize("NFKD").replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "preset";
+}
 const EMPTY_VALUES = Object.freeze({});
 var PaneStoreClass = class {
 	panels = /* @__PURE__ */ new Map();
@@ -766,6 +771,17 @@ var PaneStoreClass = class {
 	activeTabListeners = /* @__PURE__ */ new Set();
 	defaults = /* @__PURE__ */ new Map();
 	persistTargets = /* @__PURE__ */ new Map();
+	presetWriter = null;
+	pendingWrites = /* @__PURE__ */ new Map();
+	savedThisSession = /* @__PURE__ */ new WeakSet();
+	/** With a writer installed, new presets become files and edits to an active file preset are written back. */
+	setPresetWriter(writer) {
+		this.presetWriter = writer;
+		this.notifyGlobal();
+	}
+	canWritePresets() {
+		return this.presetWriter !== null;
+	}
 	setActiveTab(name) {
 		if (this.activeTabName === name) return;
 		this.activeTabName = name;
@@ -805,6 +821,7 @@ var PaneStoreClass = class {
 			})));
 			this.activePreset.set(id, saved.activePresetId ?? null);
 		}
+		this.mergeFilePresets(id, options.presets, defaults);
 		this.persist(id);
 		this.notifyGlobal();
 	}
@@ -822,6 +839,7 @@ var PaneStoreClass = class {
 		const base = this.baseValues.get(id);
 		this.baseValues.set(id, reconcileValues(base ?? newDefaults, newDefaults));
 		for (const preset of this.presets.get(id) ?? []) preset.values = reconcileValues(preset.values, newDefaults);
+		this.mergeFilePresets(id, options.presets, newDefaults);
 		const source = options.source ?? existing.source;
 		this.panels.set(id, {
 			id,
@@ -852,7 +870,63 @@ var PaneStoreClass = class {
 		this.activePreset.delete(id);
 		this.defaults.delete(id);
 		this.persistTargets.delete(id);
+		const pending = this.pendingWrites.get(id);
+		if (pending) clearTimeout(pending);
+		this.pendingWrites.delete(id);
 		this.notifyGlobal();
+	}
+	/**
+	* File presets already in memory keep their values: the session is the source of
+	* truth, and a file reloading from our own write-back must not undo newer edits.
+	*/
+	mergeFilePresets(id, files, defaults) {
+		const current = this.presets.get(id) ?? [];
+		if (!files && !current.some((p) => p.file)) return;
+		const inMemory = new Map(current.filter((p) => p.file).map((p) => [p.id, p]));
+		const fromFiles = (files ?? []).map((f) => {
+			const presetId = FILE_PREFIX + slugify(f.name);
+			return inMemory.get(presetId) ?? {
+				id: presetId,
+				name: f.name,
+				values: reconcileValues(f.values, defaults),
+				file: true
+			};
+		});
+		const unsynced = [...inMemory.values()].filter((p) => !fromFiles.some((f) => f.id === p.id) && this.savedThisSession.has(p));
+		const next = [
+			...fromFiles,
+			...unsynced,
+			...current.filter((p) => !p.file)
+		];
+		this.presets.set(id, next);
+		const active = this.activePreset.get(id);
+		if (active && !next.some((p) => p.id === active)) this.activePreset.set(id, null);
+	}
+	writeFilePreset(panelId, preset) {
+		const panel = this.panels.get(panelId);
+		if (!panel || !this.presetWriter) return;
+		const values = {};
+		for (const [path, value] of Object.entries(preset.values)) {
+			const type = typeof value === "object" && value !== null ? value.type : null;
+			if (type !== "action" && type !== "slot") values[path] = value;
+		}
+		this.presetWriter({
+			panelName: panel.name,
+			source: panel.source,
+			slug: preset.id.slice(5),
+			preset: {
+				name: preset.name,
+				values
+			}
+		});
+	}
+	scheduleFileWrite(panelId, preset) {
+		const pending = this.pendingWrites.get(panelId);
+		if (pending) clearTimeout(pending);
+		this.pendingWrites.set(panelId, setTimeout(() => {
+			this.pendingWrites.delete(panelId);
+			this.writeFilePreset(panelId, preset);
+		}, FILE_WRITE_DELAY));
 	}
 	updateValue(panelId, path, value) {
 		this.updateValues(panelId, { [path]: value });
@@ -862,12 +936,14 @@ var PaneStoreClass = class {
 		const panel = this.panels.get(panelId);
 		if (!panel) return;
 		const activeId = this.activePreset.get(panelId);
-		const target = activeId ? this.presets.get(panelId)?.find((p) => p.id === activeId)?.values : this.baseValues.get(panelId);
+		const activePreset = activeId ? this.presets.get(panelId)?.find((p) => p.id === activeId) : void 0;
+		const target = activeId ? activePreset?.values : this.baseValues.get(panelId);
 		for (const [path, value] of Object.entries(updates)) {
 			if (!(path in panel.values)) continue;
 			panel.values[path] = value;
 			if (target) target[path] = value;
 		}
+		if (activePreset?.file) this.scheduleFileWrite(panelId, activePreset);
 		this.snapshots.set(panelId, { ...panel.values });
 		this.persist(panelId);
 		this.notify(panelId);
@@ -960,14 +1036,37 @@ var PaneStoreClass = class {
 	savePreset(panelId, name) {
 		const panel = this.panels.get(panelId);
 		if (!panel) throw new Error(`Panel ${panelId} not found`);
-		const id = `preset-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
-		const preset = {
-			id,
-			name,
-			values: { ...panel.values }
-		};
 		const existing = this.presets.get(panelId) ?? [];
-		this.presets.set(panelId, [...existing, preset]);
+		let preset;
+		if (this.presetWriter) {
+			const taken = new Set(existing.map((p) => p.id));
+			const base = slugify(name);
+			let slug = base;
+			for (let n = 2; taken.has(FILE_PREFIX + slug); n++) slug = `${base}-${n}`;
+			preset = {
+				id: FILE_PREFIX + slug,
+				name,
+				values: { ...panel.values },
+				file: true
+			};
+			this.savedThisSession.add(preset);
+			const firstLocal = existing.findIndex((p) => !p.file);
+			const at = firstLocal === -1 ? existing.length : firstLocal;
+			this.presets.set(panelId, [
+				...existing.slice(0, at),
+				preset,
+				...existing.slice(at)
+			]);
+			this.writeFilePreset(panelId, preset);
+		} else {
+			preset = {
+				id: `preset-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+				name,
+				values: { ...panel.values }
+			};
+			this.presets.set(panelId, [...existing, preset]);
+		}
+		const id = preset.id;
 		this.activePreset.set(panelId, id);
 		this.snapshots.set(panelId, { ...panel.values });
 		this.persist(panelId);
@@ -987,6 +1086,7 @@ var PaneStoreClass = class {
 	}
 	deletePreset(panelId, presetId) {
 		const presets = this.presets.get(panelId) ?? [];
+		if (presets.find((p) => p.id === presetId)?.file) return;
 		this.presets.set(panelId, presets.filter((p) => p.id !== presetId));
 		if (this.activePreset.get(panelId) === presetId) this.activePreset.set(panelId, null);
 		const panel = this.panels.get(panelId);
@@ -1063,8 +1163,9 @@ var PaneStoreClass = class {
 		};
 		if (target.presets) {
 			state.baseValues = this.baseValues.get(panelId) ?? values;
-			state.presets = this.presets.get(panelId) ?? [];
-			state.activePresetId = this.activePreset.get(panelId) ?? null;
+			state.presets = (this.presets.get(panelId) ?? []).filter((p) => !p.file);
+			const active = this.activePreset.get(panelId) ?? null;
+			state.activePresetId = state.presets.some((p) => p.id === active) ? active : null;
 		}
 		try {
 			this.storage(target.storage)?.setItem(target.key, JSON.stringify(state));
@@ -1092,6 +1193,7 @@ function usePaneController(name, config, options) {
 	const [source] = useState(callerModule);
 	const panelOptions = {
 		persist: options?.persist,
+		presets: options?.presets,
 		shortcuts: options?.shortcuts,
 		source
 	};
@@ -1507,6 +1609,7 @@ const STYLES = `
 .up-content {
   overflow-y: auto;
   overflow-x: hidden;
+  overscroll-behavior: contain;
   flex: 1;
   padding: 0 12px 12px;
   scrollbar-width: none;
@@ -3403,10 +3506,15 @@ function calculatePosition(corner, width, height) {
 	const ww = window.innerWidth;
 	const wh = window.innerHeight;
 	const right = ww - width - 12;
+	const center = (ww - width) / 2;
 	const bottom = wh - height - 12;
 	switch (corner) {
 		case "top-left": return {
 			x: 12,
+			y: 12
+		};
+		case "top-center": return {
+			x: center,
 			y: 12
 		};
 		case "top-right": return {
@@ -3417,30 +3525,31 @@ function calculatePosition(corner, width, height) {
 			x: 12,
 			y: bottom
 		};
+		case "bottom-center": return {
+			x: center,
+			y: bottom
+		};
 		case "bottom-right": return {
 			x: right,
 			y: bottom
 		};
 	}
 }
-function getBestCorner(mouseX, mouseY, initialMouseX, initialMouseY, threshold = 60) {
-	const dx = mouseX - initialMouseX;
-	const dy = mouseY - initialMouseY;
-	const cx = window.innerWidth / 2;
-	const cy = window.innerHeight / 2;
-	const movingRight = dx > threshold;
-	const movingLeft = dx < -threshold;
-	const movingDown = dy > threshold;
-	const movingUp = dy < -threshold;
-	if (movingRight || movingLeft) {
-		const isBottom = mouseY > cy;
-		return movingRight ? isBottom ? "bottom-right" : "top-right" : isBottom ? "bottom-left" : "top-left";
-	}
-	if (movingDown || movingUp) {
-		const isRight = mouseX > cx;
-		return movingDown ? isRight ? "bottom-right" : "bottom-left" : isRight ? "top-right" : "top-left";
-	}
-	return mouseX > cx ? mouseY > cy ? "bottom-right" : "top-right" : mouseY > cy ? "bottom-left" : "top-left";
+const SNAP_CORNERS = [
+	"top-left",
+	"top-center",
+	"top-right",
+	"bottom-left",
+	"bottom-center",
+	"bottom-right"
+];
+/** Snap target nearest to where the panel was dropped. */
+function getSnapCorner(x, y, width, height) {
+	const distance = (c) => {
+		const p = calculatePosition(c, width, height);
+		return (p.x - x) ** 2 + (p.y - y) ** 2;
+	};
+	return SNAP_CORNERS.reduce((best, c) => distance(c) < distance(best) ? c : best);
 }
 function getCollapsedEdge(corner, orientation) {
 	if (orientation === "horizontal") return corner.endsWith("left") ? "left" : "right";
@@ -3563,6 +3672,33 @@ function calculateResizedSizeAndPosition(handle, initialWidth, initialHeight, in
 		x,
 		y
 	};
+}
+//#endregion
+//#region src/ui/containWheel.ts
+function canScroll(el, dx, dy) {
+	const style = getComputedStyle(el);
+	const scrollsY = /auto|scroll/.test(style.overflowY) && el.scrollHeight > el.clientHeight;
+	const scrollsX = /auto|scroll/.test(style.overflowX) && el.scrollWidth > el.clientWidth;
+	if (dy !== 0 && scrollsY) {
+		if (dy < 0 ? el.scrollTop > 0 : el.scrollTop + el.clientHeight < el.scrollHeight - 1) return true;
+	}
+	if (dx !== 0 && scrollsX) {
+		if (dx < 0 ? el.scrollLeft > 0 : el.scrollLeft + el.clientWidth < el.scrollWidth - 1) return true;
+	}
+	return false;
+}
+/**
+* Wheel handler for floating surfaces: scrolls inside them never reach the page.
+* `overscroll-behavior: contain` alone misses wheels over parts that don't scroll
+* (the header, or content shorter than the panel), which chain straight to the page.
+*/
+function containWheel(e) {
+	const root = e.currentTarget;
+	for (let el = e.target; el && el !== root.parentElement; el = el.parentElement) {
+		if (canScroll(el, e.deltaX, e.deltaY)) return;
+		if (el === root) break;
+	}
+	e.preventDefault();
 }
 //#endregion
 //#region node_modules/.pnpm/preact@10.29.0/node_modules/preact/jsx-runtime/dist/jsxRuntime.mjs
@@ -9707,6 +9843,7 @@ function ColorControl({ label, value, onChange, portalContainer, gradient, contr
 			open && portalContainer && $(/* @__PURE__ */ u("div", {
 				ref: popRef,
 				class: "up-cp-pop",
+				onWheel: containWheel,
 				role: "dialog",
 				"aria-label": `${label} color picker`,
 				style: { position: "fixed" },
@@ -9986,7 +10123,7 @@ function PresetBar({ panelId, presets, activePresetId, portalContainer }) {
 				}), presets.map((preset) => /* @__PURE__ */ u("div", {
 					class: `up-preset-item ${preset.id === activePresetId ? "up-preset-item-active" : ""}`,
 					onClick: () => handleSelect(preset.id),
-					children: [/* @__PURE__ */ u("span", { children: preset.name }), /* @__PURE__ */ u("button", {
+					children: [/* @__PURE__ */ u("span", { children: preset.name }), !preset.file && /* @__PURE__ */ u("button", {
 						class: "up-preset-delete",
 						onClick: (e) => {
 							e.stopPropagation();
@@ -10367,7 +10504,7 @@ function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }) {
 				shell.style.transform = `translate3d(${pos.x}px, ${pos.y}px, 0)`;
 				return;
 			}
-			const newCorner = getBestCorner(lastMX, lastMY, initMX, initMY);
+			const newCorner = getSnapCorner(initX + (lastMX - initMX), initY + (lastMY - initMY), shellW, shellH);
 			const snapped = calculatePosition(newCorner, shellW, shellH);
 			shell.style.transition = "transform 0.25s cubic-bezier(0, 0, 0.2, 1)";
 			shell.style.transform = `translate3d(${snapped.x}px, ${snapped.y}px, 0)`;
@@ -10550,6 +10687,7 @@ function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }) {
 	return /* @__PURE__ */ u("div", {
 		ref: shellRef,
 		class: "up-shell",
+		onWheel: containWheel,
 		style: {
 			width: `${shellW}px`,
 			height: `${shellH}px`,

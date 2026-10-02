@@ -65,9 +65,20 @@ Returned values keep the config's nesting (`v.shadow.blur`). Types are inferred;
 
 Other pieces:
 - `usePaneController(name, config, options)` returns `{ values, setValue, setValues, resetValues }` for updating values from code.
-- Options: `id` (stable id shared across mounts), `persist`, `shortcuts` (e.g. `{ "shadow.blur": { key: "b" } }`: hold B and scroll to scrub), `onAction`.
+- Options: `id` (stable id shared across mounts), `persist`, `presets` (file presets, below), `shortcuts` (e.g. `{ "shadow.blur": { key: "b" } }`: hold B and scroll to scrub), `onAction`.
 - `<PaneRoot layout="stack" />` shows every panel on one page instead of tabs.
 - Color controls take `contrast: "#0a0a0a"` to show a WCAG badge against that background.
+
+## Presets as files
+
+When the project uses the `tunekit/vite` plugin, presets saved with the panel's **+** are written to `presets/<slug>.json` beside the component that calls `usePane`, as `{ "name", "values" }` with dot-path keys. Edits made while a file preset is selected are written back to it. Wire them in so they load (dev and production):
+
+```tsx
+const presets = Object.values(import.meta.glob<PresetFile>("./presets/*.json", { eager: true, import: "default" }));
+usePane("Card", config, { presets });
+```
+
+To add or change a preset by hand, edit those JSON files directly.
 
 ## Custom controls (slots)
 

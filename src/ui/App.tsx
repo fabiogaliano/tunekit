@@ -8,7 +8,7 @@ import {
   dockOnEdge,
   fitToViewport,
   isInExpandZone,
-  getBestCorner,
+  getSnapCorner,
   getCollapsedEdge,
   getCollapsedPosition,
   MAGNET_RADIUS,
@@ -20,6 +20,7 @@ import type {
   PaneValue,
   PanelState,
 } from "../types.ts";
+import { containWheel } from "./containWheel.ts";
 import { Folder } from "./Folder.tsx";
 import { Panel } from "./Panel.tsx";
 import { PresetBar } from "./Preset.tsx";
@@ -276,7 +277,12 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
           return;
         }
 
-        const newCorner = getBestCorner(lastMX, lastMY, initMX, initMY);
+        const newCorner = getSnapCorner(
+          initX + (lastMX - initMX),
+          initY + (lastMY - initMY),
+          shellW,
+          shellH,
+        );
         const snapped = calculatePosition(newCorner, shellW, shellH);
 
         shell.style.transition =
@@ -513,6 +519,7 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
     <div
       ref={shellRef}
       class="up-shell"
+      onWheel={containWheel}
       style={{
         width: `${shellW}px`,
         height: `${shellH}px`,

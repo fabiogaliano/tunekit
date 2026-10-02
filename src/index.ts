@@ -32,6 +32,8 @@ export type {
   PaneValue,
   PanelState,
   Preset,
+  PresetFile,
+  PresetWriter,
   Corner,
   ControlMeta,
   ControlType,

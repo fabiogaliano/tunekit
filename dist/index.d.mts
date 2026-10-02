@@ -133,8 +133,21 @@ type PersistOptions = boolean | {
   storage?: "localStorage" | "sessionStorage";
   presets?: boolean;
 };
+/** A preset kept as a file in the repo, e.g. `presets/soft.json` next to the component. */
+type PresetFile = {
+  name: string;
+  values: Record<string, PaneValue>;
+};
+/** Receives file presets to write back to disk. The tunekit Vite plugin installs one in dev. */
+type PresetWriter = (write: {
+  panelName: string; /** Module that declared the panel; files land in a `presets/` folder beside it. */
+  source: string | undefined;
+  slug: string;
+  preset: PresetFile;
+}) => void;
 type PanelOptions = {
-  persist?: PersistOptions;
+  persist?: PersistOptions; /** Presets loaded from files. Listed before local ones and never stored in localStorage. */
+  presets?: PresetFile[];
   shortcuts?: Record<string, ShortcutConfig>; /** Module that declared the panel, so Copy and the agent bridge can point at it. */
   source?: string;
 };
@@ -150,16 +163,19 @@ type PanelState = {
 type Preset = {
   id: string;
   name: string;
-  values: Record<string, PaneValue>;
+  values: Record<string, PaneValue>; /** Backed by a file in the repo rather than localStorage. */
+  file?: boolean;
 };
-type Corner = "top-left" | "top-right" | "bottom-left" | "bottom-right";
+/** Where the expanded panel rests. The centers are snap targets only; docking always uses a true corner. */
+type Corner = "top-left" | "top-center" | "top-right" | "bottom-left" | "bottom-center" | "bottom-right";
 type TransitionMode = "easing" | "simple" | "advanced";
 //#endregion
 //#region src/react/usePane.d.ts
 type UsePaneOptions = {
   /** Stable panel id; defaults to one derived from `name` + React's useId. */id?: string;
   onAction?: (path: string) => void;
-  persist?: PersistOptions; /** Keyboard/scroll shortcuts by dot-path, e.g. `{ "blur.radius": { key: "b" } }`. */
+  persist?: PersistOptions; /** Presets kept as files, e.g. `Object.values(import.meta.glob("./presets/*.json", { eager: true, import: "default" }))`. */
+  presets?: PresetFile[]; /** Keyboard/scroll shortcuts by dot-path, e.g. `{ "blur.radius": { key: "b" } }`. */
   shortcuts?: Record<string, ShortcutConfig>;
 };
 type PaneController<T extends PaneConfig> = {
@@ -217,12 +233,25 @@ declare class PaneStoreClass {
   private activeTabListeners;
   private defaults;
   private persistTargets;
+  private presetWriter;
+  private pendingWrites;
+  private savedThisSession;
+  /** With a writer installed, new presets become files and edits to an active file preset are written back. */
+  setPresetWriter(writer: PresetWriter | null): void;
+  canWritePresets(): boolean;
   setActiveTab(name: string): void;
   getActiveTab(): string | null;
   subscribeActiveTab(listener: Listener): () => void;
   registerPanel(id: string, name: string, config: PaneConfig, options?: PanelOptions): void;
   updatePanel(id: string, name: string, config: PaneConfig, options?: PanelOptions): void;
   unregisterPanel(id: string): void;
+  /**
+   * File presets already in memory keep their values: the session is the source of
+   * truth, and a file reloading from our own write-back must not undo newer edits.
+   */
+  private mergeFilePresets;
+  private writeFilePreset;
+  private scheduleFileWrite;
   updateValue(panelId: string, path: string, value: PaneValue): void;
   /** Write several dot-paths at once with a single notification. */
   updateValues(panelId: string, updates: Record<string, PaneValue>): void;
@@ -266,4 +295,4 @@ type InitPaneOptions = {
 };
 declare function initPane(options?: InitPaneOptions): () => void;
 //#endregion
-export { type ActionConfig, type ColorConfig, type ControlConfig, type ControlInput, type ControlMeta, type ControlType, type Corner, type EasingConfig, type FolderConfig, type ImageConfig, type ImageOption, type InitPaneOptions, type PadAxis, type PadConfig, type PadValue, type PaneConfig, type PaneController, type PaneLayout, PaneRoot, PaneSlot, PaneStore, type PaneValue, type PanelOptions, type PanelState, type PersistOptions, type Preset, type ResolvedValues, type SelectConfig, type SelectOption, type ShortcutConfig, type SliderConfig, type SliderTuple, type SlotConfig, type SpringConfig, type TextConfig, type ToggleConfig, type TransitionValue, type UsePaneOptions, initPane, useActiveTab, usePane, usePaneController };
+export { type ActionConfig, type ColorConfig, type ControlConfig, type ControlInput, type ControlMeta, type ControlType, type Corner, type EasingConfig, type FolderConfig, type ImageConfig, type ImageOption, type InitPaneOptions, type PadAxis, type PadConfig, type PadValue, type PaneConfig, type PaneController, type PaneLayout, PaneRoot, PaneSlot, PaneStore, type PaneValue, type PanelOptions, type PanelState, type PersistOptions, type Preset, type PresetFile, type PresetWriter, type ResolvedValues, type SelectConfig, type SelectOption, type ShortcutConfig, type SliderConfig, type SliderTuple, type SlotConfig, type SpringConfig, type TextConfig, type ToggleConfig, type TransitionValue, type UsePaneOptions, initPane, useActiveTab, usePane, usePaneController };

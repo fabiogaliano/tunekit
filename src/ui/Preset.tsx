@@ -130,6 +130,7 @@ export function PresetBar({ panelId, presets, activePresetId, portalContainer }:
               onClick={() => handleSelect(preset.id)}
             >
               <span>{preset.name}</span>
+              {!preset.file && (
               <button
                 class="up-preset-delete"
                 onClick={(e) => {
@@ -142,6 +143,7 @@ export function PresetBar({ panelId, presets, activePresetId, portalContainer }:
                   <path d="M18 6L6 18M6 6l12 12" />
                 </svg>
               </button>
+              )}
             </div>
           ))}
         </div>,
