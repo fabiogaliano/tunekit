@@ -70,6 +70,7 @@ Other pieces:
 - Options: `id` (stable id shared across mounts), `persist`, `presets` (file presets, below), `shortcuts` (e.g. `{ "shadow.blur": { key: "b" } }`: hold B and scroll to scrub), `onAction`.
 - `<PaneRoot layout="stack" />` shows every panel on one page instead of tabs.
 - Color controls take `contrast: "#0a0a0a"` to show a WCAG badge against that background.
+- `tunekit/palettes` exports the picker's libraries (`japaneseGradients`, `wadaCombinations`, `uiGradients`, `japaneseColors`, each `{ name, colors }[]`), `paletteGradient(colors)` and `paletteColors(value)`. Use them when one pick should drive several colours, or for a random-palette action.
 
 ## Presets as files
 

@@ -57,6 +57,16 @@ Shorthand: a number or `[value, min, max, step?]` makes a slider, a boolean make
 
 The color picker has Solid, Gradient and Library tabs: OKLCH/RGB/HEX fields you can scrub, an eyedropper, a WCAG contrast badge, saved swatches, and libraries of traditional Japanese colors, Sanzo Wada's *Dictionary of Color Combinations* and uiGradients.
 
+The same libraries are importable, for picking from them in code (a "random palette" button, say):
+
+```ts
+import { japaneseGradients, wadaCombinations, uiGradients, japaneseColors, paletteGradient, paletteColors } from "tunekit/palettes";
+
+const p = wadaCombinations[Math.floor(Math.random() * wadaCombinations.length)]; // { name, colors }
+PaneStore.updateValue("my-panel", "palette", paletteGradient(p.colors)); // the CSS the picker writes
+paletteColors(value); // a color control's value back as its colours, in order
+```
+
 ## Options
 
 ```ts
