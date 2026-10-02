@@ -4,10 +4,14 @@ import type { ComponentChildren } from "preact";
 type FolderProps = {
   title: string;
   defaultOpen?: boolean;
+  /** "section" renders a panel-level header (used by the stacked layout). */
+  variant?: "section";
+  /** Shown under the header while open, inside the sticky head (section toolbar). */
+  toolbar?: ComponentChildren;
   children: ComponentChildren;
 };
 
-export function Folder({ title, defaultOpen = true, children }: FolderProps) {
+export function Folder({ title, defaultOpen = true, variant, toolbar, children }: FolderProps) {
   const [isOpen, setIsOpen] = useState(defaultOpen);
   const contentRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
@@ -32,24 +36,40 @@ export function Folder({ title, defaultOpen = true, children }: FolderProps) {
   }, [isOpen, measure]);
 
   return (
-    <div class="up-folder">
-      <div class="up-folder-header" onClick={toggle}>
-        <span class="up-folder-title">{title}</span>
-        <svg
-          class={`up-folder-chevron ${isOpen ? "up-folder-chevron-open" : "up-folder-chevron-closed"}`}
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2.5"
-          stroke-linecap="round"
-          stroke-linejoin="round"
+    <div class={variant ? `up-folder up-folder-${variant}` : "up-folder"}>
+      <div class="up-folder-head">
+        <div
+          class="up-folder-header"
+          role="button"
+          tabIndex={0}
+          aria-expanded={isOpen}
+          onClick={toggle}
+          onKeyDown={(e) => {
+            if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+            e.preventDefault();
+            toggle();
+          }}
         >
-          <path d="M6 9.5L12 15.5L18 9.5" />
-        </svg>
+          <span class="up-folder-title">{title}</span>
+          <svg
+            class={`up-folder-chevron ${isOpen ? "up-folder-chevron-open" : "up-folder-chevron-closed"}`}
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2.5"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+          >
+            <path d="M6 9.5L12 15.5L18 9.5" />
+          </svg>
+        </div>
+        {toolbar && isOpen && <div class="up-folder-toolbar">{toolbar}</div>}
       </div>
       <div
         ref={contentRef}
         class="up-folder-content"
+        // Collapsed children stay mounted for the height animation; keep them out of tab order.
+        inert={!isOpen}
         style={{
           height: isOpen ? (height !== null ? `${height}px` : "auto") : "0px",
         }}

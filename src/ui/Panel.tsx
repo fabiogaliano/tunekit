@@ -2,26 +2,33 @@ import { PaneStore } from "../store.ts";
 import type {
   ControlMeta,
   EasingConfig,
+  PadValue,
   PaneValue,
   PanelState,
   SpringConfig,
 } from "../types.ts";
-import { Action, ColorPicker, TextInput, Toggle } from "./Controls.tsx";
+import { Action, TextInput, Toggle } from "./Controls.tsx";
 import { Folder } from "./Folder.tsx";
 import { Select } from "./Select.tsx";
 import { Slider } from "./Slider.tsx";
 import { Slot } from "./Slot.tsx";
 import { TransitionControl } from "./Transition.tsx";
+import { ColorControl } from "./color/ColorControl.tsx";
+import { DialPad, ImageControl } from "./Vendor.tsx";
 
 type PanelProps = {
   panel: PanelState;
   values: Record<string, PaneValue>;
   portalContainer: HTMLElement | null;
+  /** Path whose shortcut key is currently held, to highlight it. */
+  activeShortcutPath: string | null;
 };
 
-export function Panel({ panel, values, portalContainer }: PanelProps) {
+export function Panel({ panel, values, portalContainer, activeShortcutPath }: PanelProps) {
   const renderControl = (control: ControlMeta) => {
     const value = values[control.path];
+    const set = (v: PaneValue) => PaneStore.updateValue(panel.id, control.path, v);
+    const shortcutActive = activeShortcutPath === control.path;
 
     switch (control.type) {
       case "slider":
@@ -34,6 +41,8 @@ export function Panel({ panel, values, portalContainer }: PanelProps) {
             min={control.min ?? 0}
             max={control.max ?? 100}
             step={control.step ?? 1}
+            shortcut={control.shortcut}
+            shortcutActive={shortcutActive}
           />
         );
 
@@ -44,6 +53,8 @@ export function Panel({ panel, values, portalContainer }: PanelProps) {
             label={control.label}
             checked={value as boolean}
             onChange={(v) => PaneStore.updateValue(panel.id, control.path, v)}
+            shortcut={control.shortcut}
+            shortcutActive={shortcutActive}
           />
         );
 
@@ -91,11 +102,38 @@ export function Panel({ panel, values, portalContainer }: PanelProps) {
 
       case "color":
         return (
-          <ColorPicker
+          <ColorControl
             key={control.path}
             label={control.label}
             value={value as string}
-            onChange={(v) => PaneStore.updateValue(panel.id, control.path, v)}
+            onChange={set}
+            portalContainer={portalContainer}
+            gradient={control.gradient}
+            contrast={control.contrast}
+          />
+        );
+
+      case "image":
+        return (
+          <ImageControl
+            key={control.path}
+            label={control.label}
+            value={value as string}
+            options={control.options}
+            onChange={set}
+          />
+        );
+
+      case "pad":
+        return (
+          <DialPad
+            key={control.path}
+            label={control.label}
+            value={value as PadValue}
+            x={control.pad?.x}
+            y={control.pad?.y}
+            labels={control.pad?.labels}
+            onChange={set}
           />
         );
 
@@ -103,8 +141,6 @@ export function Panel({ panel, values, portalContainer }: PanelProps) {
         return (
           <TransitionControl
             key={control.path}
-            panelId={panel.id}
-            path={control.path}
             label={control.label}
             value={value as SpringConfig | EasingConfig}
             onChange={(v) => PaneStore.updateValue(panel.id, control.path, v)}

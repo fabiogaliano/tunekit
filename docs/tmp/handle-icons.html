@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>uipane · collapsed handle icons</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #050505; color: #d4d4d4; font: 13px/1.4 system-ui, -apple-system, sans-serif; padding: 40px; -webkit-font-smoothing: antialiased; }
+  h1 { font-size: 18px; color: #fff; font-weight: 600; margin-bottom: 6px; }
+  p.lead { color: #a3a3a3; margin-bottom: 28px; max-width: 720px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 16px; max-width: 1200px; }
+  .card { background: #0a0a0a; border: 1px solid #1e1e1e; border-radius: 14px; overflow: hidden; }
+  .card h2 { font-size: 13px; color: #fff; font-weight: 600; padding: 12px 14px 2px; }
+  .card p { font-size: 12px; color: #8a8a8a; padding: 0 14px 12px; min-height: 44px; }
+  .scene { position: relative; height: 170px; background: radial-gradient(circle at 70% 40%, #17132a, #0b0b0c 70%); border-top: 1px solid #161616; }
+
+  .handle {
+    position: absolute; display: flex; align-items: center; justify-content: center; gap: 10px;
+    color: #a3a3a3; background: linear-gradient(180deg, #151515, #0a0a0a);
+    border: 1px solid #2a2a2a; box-shadow: 0 8px 28px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.04);
+    cursor: pointer; transition: transform .2s cubic-bezier(0,0,.2,1), color .15s, background .15s;
+  }
+  .handle:hover { color: #fff; background: linear-gradient(180deg, #1c1c1c, #111); }
+  .left { left: 0; top: 39px; width: 44px; height: 92px; flex-direction: column; border-left: none; border-radius: 0 16px 16px 0; }
+  .left:hover { transform: translateX(3px); }
+  .bottom { left: 130px; bottom: 0; width: 92px; height: 44px; border-bottom: none; border-radius: 16px 16px 0 0; }
+  .bottom:hover { transform: translateY(-3px); }
+  .handle svg { width: 24px; height: 24px; flex-shrink: 0; overflow: visible; }
+  .accent { color: #8b7bff; }
+
+  /* per-icon hover motion */
+  .faders .k { transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+  .handle:hover .faders .k1 { transform: translateY(4px); }
+  .handle:hover .faders .k2 { transform: translateY(-5px); }
+  .handle:hover .faders .k3 { transform: translateY(3px); }
+  .rows .k { transition: transform .35s cubic-bezier(.3,1.4,.5,1); }
+  .handle:hover .rows .k1 { transform: translateX(5px); }
+  .handle:hover .rows .k2 { transform: translateX(-6px); }
+  .handle:hover .rows .k3 { transform: translateX(4px); }
+  .chev { transition: transform .25s cubic-bezier(.3,1.4,.5,1); }
+  .left:hover .chev { transform: translateX(3px); }
+  .bottom .chev { transform: rotate(-90deg); }
+  .bottom:hover .chev { transform: rotate(-90deg) translateX(3px); }
+  .ticks .ptr { transform-origin: 12px 12px; transition: transform .4s cubic-bezier(.3,1.4,.5,1); }
+  .handle:hover .ticks .ptr { transform: rotate(70deg); }
+  .wave path { stroke-dasharray: 40; stroke-dashoffset: 0; transition: stroke-dashoffset .6s ease; }
+  .handle:hover .wave path { stroke-dashoffset: 80; }
+  .label { writing-mode: vertical-rl; transform: rotate(180deg); font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; }
+  .bottom .label { writing-mode: horizontal-tb; transform: none; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; background: #8b7bff; animation: pulse 2.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { box-shadow: 0 0 0 2px rgba(139,123,255,.25); } 50% { box-shadow: 0 0 0 6px rgba(139,123,255,0); } }
+  @media (prefers-reduced-motion: reduce) { .dot { animation: none; } }
+</style>
+</head>
+<body>
+<h1>Collapsed handle — icon options</h1>
+<p class="lead">Each one is shown on the real handle, docked to the left edge (vertical) and the bottom edge (horizontal). Hover to see its motion. Pick a number, or mix them, e.g. "2 with the purple dot from 8".</p>
+<div class="grid" id="grid"></div>
+
+<script>
+const ICONS = [
+  ["1 · Mixer faders", "Three vertical faders at different levels. Says \"controls\" with no metaphor to decode. On hover the knobs settle at new levels.",
+   `<svg class="faders" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+      <path d="M6 3v18M12 3v18M18 3v18" stroke-width="1.5" opacity=".3"/>
+      <rect class="k k1" x="3.5" y="12" width="5" height="3.5" rx="1.2" fill="currentColor" stroke="none"/>
+      <rect class="k k2 accent" x="9.5" y="5.5" width="5" height="3.5" rx="1.2" fill="currentColor" stroke="none"/>
+      <rect class="k k3" x="15.5" y="14.5" width="5" height="3.5" rx="1.2" fill="currentColor" stroke="none"/>
+    </svg>`],
+  ["2 · Tuning rows", "A cleaner version of the original sliders icon: three tracks with dots that slide on hover.",
+   `<svg class="rows" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+      <path d="M3 6h18M3 12h18M3 18h18" stroke-width="1.6" opacity=".3"/>
+      <circle class="k k1" cx="8" cy="6" r="2.6" fill="currentColor" stroke="none"/>
+      <circle class="k k2 accent" cx="16" cy="12" r="2.6" fill="currentColor" stroke="none"/>
+      <circle class="k k3" cx="10" cy="18" r="2.6" fill="currentColor" stroke="none"/>
+    </svg>`],
+  ["3 · Pull chevron", "Just a chevron pointing into the screen. Purely about what the handle does: pull to open.",
+   `<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 5l7 7-7 7"/></svg>`],
+  ["4 · Tick dial", "The knob idea done more simply: a ring of ticks and one pointer. No arc, no fill. The pointer sweeps on hover.",
+   `<svg class="ticks" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+      ${Array.from({ length: 11 }, (_, i) => { const a = (135 + i * 27) * Math.PI / 180; const r1 = 9, r2 = 11; return `<line x1="${12 + r1 * Math.cos(a)}" y1="${12 + r1 * Math.sin(a)}" x2="${12 + r2 * Math.cos(a)}" y2="${12 + r2 * Math.sin(a)}" stroke-width="1.4" opacity="${i < 4 ? 1 : .3}" class="${i < 4 ? "accent" : ""}"/>`; }).join("")}
+      <circle cx="12" cy="12" r="5.5" stroke-width="1.6"/>
+      <g class="ptr"><line x1="12" y1="12" x2="8.5" y2="15.5" stroke-width="1.8"/></g>
+    </svg>`],
+  ["5 · Curve", "A spring curve: it overshoots and settles. Ties into the transition editors. The line redraws on hover.",
+   `<svg class="wave" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M2 20C6 20 7 3 11 3s4 13 7 13 3-4 4-4" stroke-width="1.9"/>
+    </svg>`],
+  ["6 · Mini panel", "A tiny panel with rows. It reads as \"the panel is tucked here\".",
+   `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+      <rect x="3.5" y="3" width="17" height="18" rx="3.5" stroke-width="1.6"/>
+      <path d="M7 8h10" stroke-width="1.6" opacity=".5"/>
+      <path d="M7 12h6" stroke-width="2.4" class="accent"/>
+      <path d="M7 16h8" stroke-width="2.4" opacity=".7"/>
+    </svg>`],
+  ["7 · Name label", "No icon: the panel's name runs along the handle. Most explicit when you have several tools.",
+   `<span class="label">Hero</span>`],
+  ["8 · Signal dot", "A single purple dot that pulses softly. The quietest option; the handle shape does the work.",
+   `<span class="dot"></span>`],
+];
+const grid = document.getElementById("grid");
+for (const [title, desc, icon] of ICONS) {
+  grid.insertAdjacentHTML("beforeend", `<section class="card"><h2>${title}</h2><p>${desc}</p>
+    <div class="scene"><div class="handle left">${icon}</div><div class="handle bottom">${icon}</div></div></section>`);
+}
+</script>
+</body>
+</html>

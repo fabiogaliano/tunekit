@@ -2,12 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import {
   calculatePosition,
   calculateResizedSizeAndPosition,
-  COLLAPSED_SIZE,
+  allDocks,
+  collapsedFromPoint,
+  cornerFromPoint,
+  dockOnEdge,
+  fitToViewport,
+  isInExpandZone,
   getBestCorner,
+  getCollapsedEdge,
   getCollapsedPosition,
-  MIN_HEIGHT,
-  MIN_WIDTH,
-  SAFE_AREA,
+  MAGNET_RADIUS,
 } from "../position.ts";
 import { PaneStore } from "../store.ts";
 import type {
@@ -16,10 +20,15 @@ import type {
   PaneValue,
   PanelState,
 } from "../types.ts";
+import { Folder } from "./Folder.tsx";
 import { Panel } from "./Panel.tsx";
 import { PresetBar } from "./Preset.tsx";
+import { useShortcuts } from "./useShortcuts.ts";
 
 const LS_KEY = "uipane-widget";
+const LS_LAYOUT_KEY = "uipane-layout";
+
+export type PaneLayout = "tabs" | "stack";
 const LS_COLLAPSED_KEY = "uipane-collapsed";
 
 function loadLS<T>(key: string): T | null {
@@ -46,19 +55,34 @@ type ShellState = {
 };
 
 // =========================================================================
-// Settings icon SVG
+// Collapsed handle icon — a dial knob: track arc, value arc, pointer.
 // =========================================================================
-function SettingsIcon() {
+function TabsIcon() {
   return (
-    <svg viewBox="0 0 16 16" fill="none">
-      <path
-        opacity="0.5"
-        d="M6.85 11.75C6.79 11.99 6.75 12.24 6.75 12.5s.04.51.1.75H2a.75.75 0 010-1.5h4.85zM14 11.75a.75.75 0 010 1.5h-1.35c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14zM3.1 7.25C3.04 7.49 3 7.74 3 8s.04.51.1.75H2a.75.75 0 010-1.5h1.1zM14 7.25a.75.75 0 010 1.5H8.9c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14zM7.6 2.75c-.06.24-.1.49-.1.75s.04.51.1.75H2a.75.75 0 010-1.5h5.6zM14 2.75a.75.75 0 010 1.5h-.6c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14z"
-        fill="currentColor"
-      />
-      <circle cx="6" cy="8" r="1" fill="currentColor" stroke="currentColor" stroke-width="1.25" />
-      <circle cx="10.5" cy="3.5" r="1" fill="currentColor" stroke="currentColor" stroke-width="1.25" />
-      <circle cx="9.75" cy="12.5" r="1" fill="currentColor" stroke="currentColor" stroke-width="1.25" />
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 9h18M3 9V6a2 2 0 0 1 2-2h4l2 5" />
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+    </svg>
+  );
+}
+
+function StackIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <rect x="3" y="3" width="18" height="7" rx="2" />
+      <rect x="3" y="14" width="18" height="7" rx="2" />
+    </svg>
+  );
+}
+
+/** Tuning rows whose knobs line up into an arrow pointing into the screen; drawn for the left edge. */
+function KnobArrowIcon() {
+  return (
+    <svg class="up-knob-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round">
+      <path d="M3 5h18M3 12h18M3 19h18" stroke-width="1.6" opacity="0.25" />
+      <circle class="up-knob-arrow-k up-knob-arrow-k1" cx="9" cy="5" r="2.6" fill="currentColor" stroke="none" />
+      <circle class="up-knob-arrow-k2" cx="15" cy="12" r="2.6" fill="currentColor" stroke="none" />
+      <circle class="up-knob-arrow-k up-knob-arrow-k3" cx="9" cy="19" r="2.6" fill="currentColor" stroke="none" />
     </svg>
   );
 }
@@ -67,7 +91,13 @@ function SettingsIcon() {
 // App — orchestrates expanded/collapsed panel
 // =========================================================================
 
-export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLElement | null; childrenSlot: HTMLDivElement | null }) {
+type AppProps = {
+  portalContainer: HTMLElement | null;
+  childrenSlot: HTMLDivElement | null;
+  defaultLayout?: PaneLayout;
+};
+
+export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: AppProps) {
   const adoptSlot = useCallback(
     (el: HTMLDivElement | null) => {
       if (el && childrenSlot && childrenSlot.parentNode !== el) {
@@ -78,10 +108,13 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
   );
   const shellRef = useRef<HTMLDivElement>(null);
 
+  const activeShortcut = useShortcuts();
+
   // Panels from store
   const [panels, setPanels] = useState<PanelState[]>([]);
   const [values, setValues] = useState<Record<string, Record<string, PaneValue>>>({});
-  const [activeTab, setActiveTab] = useState(0);
+  // By id, not index: a tab unmounting must not silently select its neighbour.
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   // Shell geometry
   const savedShell = loadLS<ShellState>(LS_KEY);
@@ -91,6 +124,20 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
   const [width, setWidth] = useState(savedShell?.width ?? 320);
   const [height, setHeight] = useState(savedShell?.height ?? 420);
   const [collapsed, setCollapsed] = useState<CollapsedState | null>(savedCollapsed);
+  const [docking, setDocking] = useState(false);
+  const [layout, setLayout] = useState<PaneLayout>(() => loadLS<PaneLayout>(LS_LAYOUT_KEY) ?? defaultLayout);
+
+  // width/height are the user's preferred size; what renders is that size
+  // fitted into the current viewport, so a smaller window never loses it.
+  const [, setViewportTick] = useState(0);
+  useEffect(() => {
+    const onResize = () => setViewportTick((n) => n + 1);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
+  const fitted = fitToViewport(width, height);
+  const shellW = fitted.width;
+  const shellH = fitted.height;
 
   // Subscribe to store
   useEffect(() => {
@@ -127,13 +174,28 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
 
   useEffect(() => {
     if (collapsed) saveLS(LS_COLLAPSED_KEY, collapsed);
-    else localStorage.removeItem(LS_COLLAPSED_KEY);
+    else {
+      try {
+        localStorage.removeItem(LS_COLLAPSED_KEY);
+      } catch {
+        /* storage unavailable */
+      }
+    }
   }, [collapsed]);
 
+  useEffect(() => {
+    saveLS(LS_LAYOUT_KEY, layout);
+  }, [layout]);
+
   // Position
-  const pos = collapsed
-    ? getCollapsedPosition(collapsed.corner, collapsed.orientation)
-    : calculatePosition(corner, width, height);
+  const pos = calculatePosition(corner, shellW, shellH);
+
+  const currentPanel =
+    panels.find((p) => p.id === activeTabId) ?? panels[0] ?? null;
+
+  useEffect(() => {
+    if (currentPanel) PaneStore.setActiveTab(currentPanel.name);
+  }, [currentPanel?.name]);
 
   // ------- Drag (expanded) -------
   const handleDrag = useCallback(
@@ -166,19 +228,19 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
           shell.style.transform = `translate3d(${cx}px, ${cy}px, 0)`;
 
           // Check collapse threshold (35% area off-screen)
-          const r = cx + width;
-          const b = cy + height;
+          const r = cx + shellW;
+          const b = cy + shellH;
           const outL = Math.max(0, -cx);
           const outR = Math.max(0, r - window.innerWidth);
           const outT = Math.max(0, -cy);
           const outB = Math.max(0, b - window.innerHeight);
-          const hOut = Math.min(width, outL + outR);
-          const vOut = Math.min(height, outT + outB);
-          const areaOut = hOut * height + vOut * width - hOut * vOut;
+          const hOut = Math.min(shellW, outL + outR);
+          const vOut = Math.min(shellH, outT + outB);
+          const areaOut = hOut * shellH + vOut * shellW - hOut * vOut;
 
-          if (areaOut > width * height * 0.35) {
-            const wcx = cx + width / 2;
-            const wcy = cy + height / 2;
+          if (areaOut > shellW * shellH * 0.35) {
+            const wcx = cx + shellW / 2;
+            const wcy = cy + shellH / 2;
             const scx = window.innerWidth / 2;
             const scy = window.innerHeight / 2;
             const tCorner: Corner =
@@ -190,8 +252,12 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
                 ? ("horizontal" as const)
                 : ("vertical" as const);
 
-            setCorner(tCorner);
-            setCollapsed({ corner: tCorner, orientation });
+            // Dock at the magnet point nearest to where the pointer pushed the panel off.
+            const edge = getCollapsedEdge(tCorner, orientation);
+            const dock = dockOnEdge(edge, lastMX, lastMY);
+            setCorner(dock.corner);
+            setDocking(true);
+            setCollapsed({ corner: dock.corner, orientation, anchor: dock.anchor });
             cleanup();
           }
           rafId = null;
@@ -211,7 +277,7 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
         }
 
         const newCorner = getBestCorner(lastMX, lastMY, initMX, initMY);
-        const snapped = calculatePosition(newCorner, width, height);
+        const snapped = calculatePosition(newCorner, shellW, shellH);
 
         shell.style.transition =
           "transform 0.25s cubic-bezier(0, 0, 0.2, 1)";
@@ -235,48 +301,97 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     },
-    [pos.x, pos.y, width, height],
+    [pos.x, pos.y, shellW, shellH],
   );
 
-  // ------- Drag (collapsed) -------
-  const handleCollapsedDrag = useCallback(
-    (e: MouseEvent) => {
+  // ------- Collapsed handle: click/Enter expands; drag to re-dock or expand -------
+  const collapsedDragged = useRef(false);
+  // Magnet points are only drawn while the handle is being dragged.
+  const [dockTarget, setDockTarget] = useState<string | null>(null);
+
+  const expand = useCallback(
+    (to?: Corner) => {
       if (!collapsed) return;
+      setCollapsed(null);
+      setCorner(to ?? collapsed.corner);
+    },
+    [collapsed],
+  );
+
+  const handleCollapsedDrag = useCallback(
+    (e: PointerEvent) => {
+      if (!collapsed || e.button !== 0) return;
       e.preventDefault();
+      const el = e.currentTarget as HTMLElement;
+      collapsedDragged.current = false;
       const initMX = e.clientX;
       const initMY = e.clientY;
-      const threshold = 50;
+      const rect = el.getBoundingClientRect();
+      const grabX = initMX - rect.left;
+      const grabY = initMY - rect.top;
+      let lastX = initMX;
+      let lastY = initMY;
+      // Preact owns the class attribute, but mid-drag the shape must follow the edge it's pulled to.
+      const setEdgeClass = (edge: string) => {
+        el.classList.remove("up-collapsed-left", "up-collapsed-right", "up-collapsed-top", "up-collapsed-bottom");
+        el.classList.add(`up-collapsed-${edge}`);
+      };
 
-      const onMove = (ev: MouseEvent) => {
-        const dx = ev.clientX - initMX;
-        const dy = ev.clientY - initMY;
-        let expand = false;
-
-        if (collapsed.orientation === "horizontal") {
-          if (collapsed.corner.endsWith("left") && dx > threshold) expand = true;
-          if (collapsed.corner.endsWith("right") && dx < -threshold) expand = true;
-        } else {
-          if (collapsed.corner.startsWith("top") && dy > threshold) expand = true;
-          if (collapsed.corner.startsWith("bottom") && dy < -threshold) expand = true;
+      const onMove = (ev: PointerEvent) => {
+        lastX = ev.clientX;
+        lastY = ev.clientY;
+        if (!collapsedDragged.current) {
+          if (Math.hypot(lastX - initMX, lastY - initMY) <= 4) return;
+          collapsedDragged.current = true;
+          el.classList.add("up-collapsed-dragging");
         }
-
-        if (expand) {
-          setCollapsed(null);
-          setCorner(collapsed.corner);
-          done();
+        const expanding = isInExpandZone(lastX, lastY);
+        el.classList.toggle("up-collapsed-will-expand", expanding);
+        const dock = expanding ? null : collapsedFromPoint(lastX, lastY);
+        const r = dock?.rect;
+        const pulled = r && Math.hypot(r.x + r.width / 2 - lastX, r.y + r.height / 2 - lastY) < MAGNET_RADIUS;
+        setDockTarget(dock ? `${dock.edge}-${dock.anchor}` : "");
+        setEdgeClass(pulled ? dock.edge : getCollapsedEdge(collapsed.corner, collapsed.orientation));
+        if (pulled) {
+          // Within reach of a point, the handle jumps onto it (in that edge's shape).
+          el.style.left = `${r.x}px`;
+          el.style.top = `${r.y}px`;
+          el.style.width = `${r.width}px`;
+          el.style.height = `${r.height}px`;
+        } else {
+          el.style.left = `${lastX - grabX}px`;
+          el.style.top = `${lastY - grabY}px`;
+          el.style.width = `${rect.width}px`;
+          el.style.height = `${rect.height}px`;
         }
       };
 
-      const onUp = () => done();
-      const done = () => {
+      const onUp = () => {
         document.removeEventListener("pointermove", onMove);
         document.removeEventListener("pointerup", onUp);
+        if (!collapsedDragged.current) return;
+        el.classList.remove("up-collapsed-dragging", "up-collapsed-will-expand");
+        setDockTarget(null);
+
+        if (isInExpandZone(lastX, lastY)) {
+          expand(cornerFromPoint(lastX, lastY));
+          return;
+        }
+        const next = collapsedFromPoint(lastX, lastY);
+        // Write the snapped rect directly too: if it equals the previous
+        // props, Preact won't touch the styles we mutated while dragging.
+        el.style.left = `${next.rect.x}px`;
+        el.style.top = `${next.rect.y}px`;
+        el.style.width = `${next.rect.width}px`;
+        el.style.height = `${next.rect.height}px`;
+        setEdgeClass(next.edge);
+        setCollapsed({ corner: next.corner, orientation: next.orientation, anchor: next.anchor });
       };
 
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     },
-    [collapsed],
+    [collapsed, expand],
   );
 
   // ------- Resize -------
@@ -286,9 +401,9 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
       e.stopPropagation();
       const initMX = e.clientX;
       const initMY = e.clientY;
-      const initW = width;
-      const initH = height;
-      const initPos = calculatePosition(corner, width, height);
+      const initW = shellW;
+      const initH = shellH;
+      const initPos = calculatePosition(corner, shellW, shellH);
       const shell = shellRef.current;
       if (!shell) return;
 
@@ -320,7 +435,7 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
       document.addEventListener("pointermove", onMove);
       document.addEventListener("pointerup", onUp);
     },
-    [width, height, corner],
+    [shellW, shellH, corner],
   );
 
   // ------- Resize handles -------
@@ -339,33 +454,68 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
 
   // ------- Collapsed state -------
   if (collapsed) {
-    const cPos = getCollapsedPosition(collapsed.corner, collapsed.orientation);
+    const rect = getCollapsedPosition(collapsed.corner, collapsed.orientation, collapsed.anchor);
+    const edge = getCollapsedEdge(collapsed.corner, collapsed.orientation);
+    const title = panels.length === 1 ? panels[0]!.name : "uipane";
     return (
-      <div
-        class="up-collapsed"
-        style={{ transform: `translate3d(${cPos.x}px, ${cPos.y}px, 0)` }}
+      <>
+      {dockTarget !== null &&
+        allDocks().map((d) => (
+          <i
+            key={`${d.edge}-${d.anchor}`}
+            class={`up-dock-mark up-dock-mark-${d.edge} ${dockTarget === `${d.edge}-${d.anchor}` ? "up-dock-mark-on" : ""}`}
+            style={{
+              left: `${d.rect.x}px`,
+              top: `${d.rect.y}px`,
+              width: `${d.rect.width}px`,
+              height: `${d.rect.height}px`,
+            }}
+          />
+        ))}
+      <button
+        type="button"
+        class={`up-collapsed up-collapsed-${edge} ${docking ? "up-collapsed-enter" : ""}`}
+        onAnimationEnd={() => setDocking(false)}
+        style={{
+          left: `${rect.x}px`,
+          top: `${rect.y}px`,
+          width: `${rect.width}px`,
+          height: `${rect.height}px`,
+        }}
+        aria-label={`Open ${title}`}
+        title={`Open ${title}`}
         onPointerDown={handleCollapsedDrag}
+        onClick={() => {
+          if (collapsedDragged.current) return;
+          expand();
+        }}
       >
-        <SettingsIcon />
-      </div>
+        <KnobArrowIcon />
+      </button>
+      </>
     );
   }
 
   // ------- Expanded state -------
-  const currentPanel = panels[activeTab] ?? panels[0];
-  const currentValues = currentPanel ? (values[currentPanel.id] ?? {}) : {};
+  // A single panel has nothing to stack, so it always uses the plain view.
+  const stacked = layout === "stack" && panels.length > 1;
 
-  useEffect(() => {
-    if (currentPanel) PaneStore.setActiveTab(currentPanel.name);
-  }, [currentPanel?.name]);
+  const renderPanel = (panel: PanelState) => (
+    <Panel
+      panel={panel}
+      values={values[panel.id] ?? {}}
+      portalContainer={portalContainer}
+      activeShortcutPath={activeShortcut?.panelId === panel.id ? activeShortcut.path : null}
+    />
+  );
 
   return (
     <div
       ref={shellRef}
       class="up-shell"
       style={{
-        width: `${width}px`,
-        height: `${height}px`,
+        width: `${shellW}px`,
+        height: `${shellH}px`,
         transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
       }}
     >
@@ -376,16 +526,29 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
             {panels.length === 1 ? currentPanel?.name ?? "uipane" : "uipane"}
           </span>
         </div>
+        {panels.length > 1 && (
+          <div class="up-header-actions">
+            <button
+              type="button"
+              class="up-header-btn"
+              aria-label={stacked ? "Show panels as tabs" : "Show all panels on one page"}
+              title={stacked ? "Tabs" : "Single page"}
+              onClick={() => setLayout(stacked ? "tabs" : "stack")}
+            >
+              {stacked ? <TabsIcon /> : <StackIcon />}
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
-      {panels.length > 1 && (
+      {!stacked && panels.length > 1 && (
         <div class="up-tabs">
-          {panels.map((panel, i) => (
+          {panels.map((panel) => (
             <button
               key={panel.id}
-              class={`up-tab ${i === activeTab ? "up-tab-active" : ""}`}
-              onClick={() => setActiveTab(i)}
+              class={`up-tab ${panel.id === currentPanel?.id ? "up-tab-active" : ""}`}
+              onClick={() => setActiveTabId(panel.id)}
             >
               {panel.name}
             </button>
@@ -393,17 +556,38 @@ export function App({ portalContainer, childrenSlot }: { portalContainer: HTMLEl
         </div>
       )}
 
+      {!stacked && currentPanel && (
+        <PresetBar
+          panelId={currentPanel.id}
+          presets={PaneStore.getPresets(currentPanel.id)}
+          activePresetId={PaneStore.getActivePresetId(currentPanel.id)}
+          portalContainer={portalContainer}
+        />
+      )}
+
       {/* Panel content */}
-      <div class="up-content">
+      <div class={`up-content ${stacked ? "up-content-stacked" : ""}`}>
         {/* React children slot — inside scrollable content */}
         <div ref={adoptSlot} />
-        {currentPanel && (
-          <Panel
-            panel={currentPanel}
-            values={currentValues}
-            portalContainer={portalContainer}
-          />
-        )}
+        {stacked
+          ? panels.map((panel) => (
+              <Folder
+                key={panel.id}
+                title={panel.name}
+                variant="section"
+                toolbar={
+                  <PresetBar
+                    panelId={panel.id}
+                    presets={PaneStore.getPresets(panel.id)}
+                    activePresetId={PaneStore.getActivePresetId(panel.id)}
+                    portalContainer={portalContainer}
+                  />
+                }
+              >
+                {renderPanel(panel)}
+              </Folder>
+            ))
+          : currentPanel && renderPanel(currentPanel)}
       </div>
 
       {/* Resize handles */}

@@ -94,3 +94,39 @@ export function animateValue(
     },
   };
 }
+
+export type SpringPhysics = { stiffness: number; damping: number; mass: number };
+
+/** Motion's visualDuration/bounce → physical spring constants (mass 1). */
+export function timeToPhysics(visualDuration: number, bounce: number): SpringPhysics {
+  const stiffness = Math.pow((2 * Math.PI) / visualDuration, 2);
+  return { stiffness, damping: 2 * (1 - bounce) * Math.sqrt(stiffness), mass: 1 };
+}
+
+export function physicsToTime({ stiffness, damping, mass }: SpringPhysics): {
+  visualDuration: number;
+  bounce: number;
+} {
+  const omega = Math.sqrt(stiffness / mass);
+  const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+  return { visualDuration: (2 * Math.PI) / omega, bounce: Math.max(0, 1 - zeta) };
+}
+
+/**
+ * Analytic step response (0 → 1, starting at rest). Closed form instead of
+ * numeric integration: a fixed-step integrator diverges for stiff, light
+ * springs that are still inside the editor's slider ranges.
+ */
+export function springProgress(t: number, { stiffness, damping, mass }: SpringPhysics): number {
+  const w0 = Math.sqrt(stiffness / mass);
+  const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+  if (zeta < 1) {
+    const wd = w0 * Math.sqrt(1 - zeta * zeta);
+    return 1 - Math.exp(-zeta * w0 * t) * (Math.cos(wd * t) + ((zeta * w0) / wd) * Math.sin(wd * t));
+  }
+  if (zeta === 1) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+  const s = Math.sqrt(zeta * zeta - 1);
+  const r1 = -w0 * (zeta - s);
+  const r2 = -w0 * (zeta + s);
+  return 1 - (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r2 - r1);
+}

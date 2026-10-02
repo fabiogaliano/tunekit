@@ -1,5 +1,6 @@
 // React adapter
-export { usePane } from "./react/usePane.ts";
+export { usePane, usePaneController } from "./react/usePane.ts";
+export type { UsePaneOptions, PaneController } from "./react/usePane.ts";
 export { PaneRoot } from "./react/PaneRoot.ts";
 export { PaneSlot } from "./react/PaneSlot.tsx";
 export { useActiveTab } from "./react/useActiveTab.ts";
@@ -8,7 +9,8 @@ export { useActiveTab } from "./react/useActiveTab.ts";
 export { PaneStore } from "./store.ts";
 
 // Core mount (for non-React usage)
-export { initPane } from "./mount.ts";
+export { initPane, type InitPaneOptions } from "./mount.ts";
+export type { PaneLayout } from "./ui/App.tsx";
 
 // Types
 export type {
@@ -33,4 +35,14 @@ export type {
   Corner,
   ControlMeta,
   ControlType,
+  ControlInput,
+  SliderTuple,
+  ImageConfig,
+  ImageOption,
+  PadConfig,
+  PadAxis,
+  PadValue,
+  ShortcutConfig,
+  PersistOptions,
+  PanelOptions,
 } from "./types.ts";

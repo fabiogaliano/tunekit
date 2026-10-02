@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { animateSpring, type AnimationHandle } from "../anim.ts";
+import { formatSliderShortcut } from "../shortcuts.ts";
+import type { ShortcutConfig } from "../types.ts";
+import { handleSliderKey } from "../vendor/dialkit/control-keyboard.ts";
 
 type SliderProps = {
   label: string;
@@ -8,6 +11,8 @@ type SliderProps = {
   min: number;
   max: number;
   step: number;
+  shortcut?: ShortcutConfig;
+  shortcutActive?: boolean;
 };
 
 const CLICK_THRESHOLD = 3;
@@ -35,7 +40,16 @@ function snapToDecile(rawValue: number, min: number, max: number): number {
   return rawValue;
 }
 
-export function Slider({ label, value, onChange, min, max, step }: SliderProps) {
+export function Slider({
+  label,
+  value,
+  onChange,
+  min,
+  max,
+  step,
+  shortcut,
+  shortcutActive,
+}: SliderProps) {
   const wrapRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -56,7 +70,7 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
   const handleRef = useRef<HTMLDivElement>(null);
   const trackRef = useRef<HTMLDivElement>(null);
 
-  const percentage = ((value - min) / (max - min)) * 100;
+  const percentage = Math.max(0, Math.min(100, ((value - min) / (max - min || 1)) * 100));
 
   useEffect(() => {
     if (!interacting.current && !animHandle.current) {
@@ -99,7 +113,9 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
 
   const handlePointerDown = useCallback(
     (e: PointerEvent) => {
-      if (isEditing) return;
+      // The editable value sits inside the track; pressing it must open the
+      // editor, not register as a click-to-jump on the track.
+      if (isEditing || (e.target as Element).closest(".up-slider-value-editable")) return;
       e.preventDefault();
       (e.target as HTMLElement).setPointerCapture(e.pointerId);
       pointerStart.current = { x: e.clientX, y: e.clientY };
@@ -219,9 +235,10 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
     }
   }, [isEditing]);
 
+  const cancelled = useRef(false);
   const submitEdit = useCallback(() => {
     const parsed = parseFloat(editValue);
-    if (!isNaN(parsed)) {
+    if (!cancelled.current && !isNaN(parsed)) {
       onChange(roundValue(Math.max(min, Math.min(max, parsed)), step));
     }
     setIsEditing(false);
@@ -255,6 +272,25 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
       <div
         ref={trackRef}
         class={cls}
+        role="slider"
+        tabIndex={isEditing ? -1 : 0}
+        aria-label={label}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={displayValue}
+        onKeyDown={(e) =>
+          handleSliderKey(e, value, min, max, step, (next) => {
+            animHandle.current?.stop();
+            animHandle.current = null;
+            setFillPercent(((next - min) / (max - min)) * 100);
+            onChange(next);
+          }, () => {
+            cancelled.current = false;
+            setEditValue(displayValue);
+            setIsEditing(true);
+          })
+        }
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
         onPointerUp={handlePointerUp}
@@ -277,7 +313,14 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
           class="up-slider-handle"
           style={{ left: `max(5px, calc(${percentage}% - 9px))` }}
         />
-        <span class="up-slider-label">{label}</span>
+        <span class="up-slider-label">
+          {label}
+          {shortcut && (
+            <span class={`dialkit-shortcut-pill${shortcutActive ? " dialkit-shortcut-pill-active" : ""}`}>
+              {formatSliderShortcut(shortcut)}
+            </span>
+          )}
+        </span>
         {isEditing ? (
           <input
             ref={inputRef}
@@ -288,8 +331,11 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
             onKeyDown={(e) => {
               if (e.key === "Enter") submitEdit();
               if (e.key === "Escape") {
+                // Unmounting the input can fire blur → submitEdit afterwards.
+                cancelled.current = true;
                 setIsEditing(false);
                 setIsValueHovered(false);
+                setIsValueEditable(false);
               }
             }}
             onBlur={submitEdit}
@@ -305,6 +351,7 @@ export function Slider({ label, value, onChange, min, max, step }: SliderProps) 
               if (isValueEditable) {
                 e.stopPropagation();
                 e.preventDefault();
+                cancelled.current = false;
                 setIsEditing(true);
                 setEditValue(displayValue);
               }

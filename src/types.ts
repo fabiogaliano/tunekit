@@ -30,12 +30,18 @@ export type SelectOption = string | { value: string; label: string };
 export type SelectConfig = {
   type: "select";
   value?: string;
-  options: SelectOption[];
+  // readonly so `usePane`'s const type parameter can infer inline option arrays.
+  options: readonly SelectOption[];
 };
 
 export type ColorConfig = {
   type: "color";
+  /** Any CSS color; with `gradient`, also a CSS gradient string. */
   value?: string;
+  /** Adds the Gradient tab; the value may then be a `linear/radial/conic-gradient(...)`. */
+  gradient?: boolean;
+  /** Background for the contrast badge (it also offers white and black). */
+  contrast?: string;
 };
 
 export type TextConfig = {
@@ -56,10 +62,32 @@ export type SpringConfig = {
 export type EasingConfig = {
   type: "easing";
   duration: number;
-  ease: [number, number, number, number];
+  ease: readonly [number, number, number, number];
 };
 
 export type TransitionValue = SpringConfig | EasingConfig;
+
+export type ImageOption = string | { value: string; label: string };
+
+export type ImageConfig = {
+  type: "image";
+  value?: string;
+  options?: readonly ImageOption[];
+};
+
+/** [default, min, max, step?] — the same notation as the slider shorthand. */
+export type PadAxis = readonly [number, number, number, number?];
+
+export type PadValue = { x: number; y: number };
+
+export type PadConfig = {
+  type: "pad";
+  /** Defaults to [0, -1, 1, 0.01]. */
+  x?: PadAxis;
+  /** Positive Y points up. Defaults to [0, -1, 1, 0.01]. */
+  y?: PadAxis;
+  labels?: { x?: string; y?: string };
+};
 
 export type FolderConfig<C extends PaneConfig = PaneConfig> = {
   type: "folder";
@@ -77,16 +105,54 @@ export type ControlConfig =
   | TextConfig
   | SpringConfig
   | EasingConfig
+  | ImageConfig
+  | PadConfig
   | FolderConfig;
 
-export type PaneConfig = Record<string, ControlConfig>;
+/** `[default, min, max, step?]` shorthand for a slider. */
+export type SliderTuple = readonly [number, number, number, number?];
+
+/**
+ * Anything a config key may hold. Besides explicit `{ type }` controls:
+ * a number or tuple → slider, boolean → toggle, string → color (if it parses
+ * as a color or CSS gradient) or text, and a plain object → folder
+ * (`_collapsed: true` starts it closed).
+ */
+export type ControlInput =
+  | ControlConfig
+  | SliderTuple
+  | number
+  | boolean
+  | string
+  | PaneConfig;
+
+// An interface (not a Record alias) breaks the FolderConfig ↔ PaneConfig cycle;
+// as a type alias TypeScript collapses ControlConfig to `any`.
+export interface PaneConfig {
+  // Objects carrying `type` must be a real control, so a typo such as
+  // { type: "slidr" } is an error rather than a folder.
+  type?: never;
+  [key: string]: ControlInput | undefined;
+}
 
 // ---------------------------------------------------------------------------
 // Resolved value types — what usePane() returns
 // ---------------------------------------------------------------------------
 
-type ResolveControl<T extends ControlConfig> = T extends SliderConfig
+type ResolveControl<T> = T extends number
   ? number
+  : T extends boolean
+  ? boolean
+  : T extends string
+  ? string
+  : T extends SliderTuple
+  ? number
+  : T extends SliderConfig
+  ? number
+  : T extends ImageConfig
+  ? string
+  : T extends PadConfig
+  ? PadValue
   : T extends ToggleConfig
     ? boolean
     : T extends SelectConfig
@@ -101,12 +167,16 @@ type ResolveControl<T extends ControlConfig> = T extends SliderConfig
               ? TransitionValue
               : T extends FolderConfig<infer C>
                 ? ResolvedValues<C>
-                : never;
+                : T extends PaneConfig
+                  ? ResolvedValues<T>
+                  : never;
 
 export type ResolvedValues<T extends PaneConfig> = {
-  [K in keyof T as T[K] extends ActionConfig | SlotConfig ? never : K]: ResolveControl<
-    T[K]
-  >;
+  [K in keyof T as K extends "_collapsed"
+    ? never
+    : T[K] extends ActionConfig | SlotConfig
+      ? never
+      : K]: ResolveControl<T[K]>;
 };
 
 // ---------------------------------------------------------------------------
@@ -124,6 +194,8 @@ export type ControlType =
   | "spring"
   | "easing"
   | "transition"
+  | "image"
+  | "pad"
   | "folder";
 
 export type ControlMeta = {
@@ -135,8 +207,40 @@ export type ControlMeta = {
   step?: number;
   children?: ControlMeta[];
   defaultOpen?: boolean;
-  options?: SelectOption[];
+  options?: readonly SelectOption[];
   placeholder?: string;
+  gradient?: boolean;
+  contrast?: string;
+  pad?: Omit<PadConfig, "type">;
+  shortcut?: ShortcutConfig;
+};
+
+/**
+ * Hold `key` (with `modifier`) and scroll / drag / move to scrub a slider, or
+ * press it to flip a toggle. `scroll-only` scrubs on any wheel with no key.
+ */
+export type ShortcutConfig = {
+  key?: string;
+  modifier?: "alt" | "shift" | "meta";
+  /** fine = 1% of range, normal = step, coarse = 10% of range. */
+  mode?: "fine" | "normal" | "coarse";
+  interaction?: "scroll" | "drag" | "move" | "scroll-only";
+};
+
+/** Keep values (and presets) across reloads. `true` stores under `uipane:<name>`. */
+export type PersistOptions =
+  | boolean
+  | {
+      key?: string;
+      storage?: "localStorage" | "sessionStorage";
+      presets?: boolean;
+    };
+
+export type PanelOptions = {
+  persist?: PersistOptions;
+  shortcuts?: Record<string, ShortcutConfig>;
+  /** Module that declared the panel, so Copy and the agent bridge can point at it. */
+  source?: string;
 };
 
 // ---------------------------------------------------------------------------
@@ -149,13 +253,16 @@ export type PaneValue =
   | string
   | SpringConfig
   | EasingConfig
-  | ActionConfig;
+  | ActionConfig
+  | PadValue;
 
 export type PanelState = {
   id: string;
   name: string;
   controls: ControlMeta[];
   values: Record<string, PaneValue>;
+  shortcuts: Record<string, ShortcutConfig>;
+  source?: string;
 };
 
 export type Preset = {
@@ -175,10 +282,14 @@ export type Corner =
   | "bottom-right";
 
 export type CollapseOrientation = "horizontal" | "vertical";
+/** Magnet points along an edge: either corner end, or the middle. */
+export type DockAnchor = "start" | "center" | "end";
 
 export type CollapsedState = {
   corner: Corner;
   orientation: CollapseOrientation;
+  /** Where along its edge the handle sits; absent = the corner's end. */
+  anchor?: DockAnchor;
 };
 
 export type WidgetDimensions = {

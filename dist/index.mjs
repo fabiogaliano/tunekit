@@ -1,9 +1,580 @@
-import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createPortal } from "react-dom";
+//#region src/vendor/dialkit/color.ts
+const clamp$2 = (n, min = 0, max = 1) => Math.max(min, Math.min(max, n));
+const wrapHue = (h) => (h % 360 + 360) % 360;
+const multiply = (m, v) => m.map((row) => row.reduce((n, x, i) => n + x * v[i], 0));
+const linearize = (v) => Math.abs(v) <= .04045 ? v / 12.92 : Math.sign(v) * ((Math.abs(v) + .055) / 1.055) ** 2.4;
+const encode = (v) => Math.abs(v) <= .0031308 ? 12.92 * v : Math.sign(v) * (1.055 * Math.abs(v) ** (1 / 2.4) - .055);
+const RGB_XYZ = [
+	[
+		.4123907993,
+		.3575843394,
+		.1804807884
+	],
+	[
+		.2126390059,
+		.7151686788,
+		.0721923154
+	],
+	[
+		.0193308187,
+		.1191947798,
+		.9505321522
+	]
+];
+const P3_XYZ = [
+	[
+		.4865709486,
+		.2656676932,
+		.1982172852
+	],
+	[
+		.2289745641,
+		.6917385218,
+		.0792869141
+	],
+	[
+		0,
+		.0451133819,
+		1.0439443689
+	]
+];
+const XYZ_RGB = [
+	[
+		3.2409699419,
+		-1.5373831776,
+		-.4986107603
+	],
+	[
+		-.9692436363,
+		1.8759675015,
+		.0415550574
+	],
+	[
+		.0556300797,
+		-.2039769589,
+		1.0569715142
+	]
+];
+const XYZ_P3 = [
+	[
+		2.4934969119,
+		-.9313836179,
+		-.4027107845
+	],
+	[
+		-.8294889696,
+		1.7626640603,
+		.0236246858
+	],
+	[
+		.0358458302,
+		-.0761723893,
+		.956884524
+	]
+];
+function rgbToColor(rgb, a = 1, space = "srgb") {
+	const [l, m, s] = multiply([
+		[
+			.819022438,
+			.3619062601,
+			-.1288737815
+		],
+		[
+			.0329836539,
+			.9292868616,
+			.0361446664
+		],
+		[
+			.0481771894,
+			.2642395318,
+			.6335478285
+		]
+	], multiply(space === "p3" ? P3_XYZ : RGB_XYZ, rgb.map(linearize))).map(Math.cbrt);
+	const L = .2104542553 * l + .793617785 * m - .0040720468 * s;
+	const A = 1.9779984951 * l - 2.428592205 * m + .4505937099 * s;
+	const B = .0259040371 * l + .7827717662 * m - .808675766 * s;
+	const c = Math.hypot(A, B);
+	return {
+		l: clamp$2(L),
+		c: c < 1e-7 ? 0 : c,
+		h: c < 1e-7 ? 0 : wrapHue(Math.atan2(B, A) * 180 / Math.PI),
+		a: clamp$2(a)
+	};
+}
+function colorToRgb(color, space = "srgb") {
+	const a = color.c * Math.cos(color.h * Math.PI / 180);
+	const b = color.c * Math.sin(color.h * Math.PI / 180);
+	const xyz = multiply([
+		[
+			1.2268798734,
+			-.5578149966,
+			.2813910502
+		],
+		[
+			-.0405757626,
+			1.1122868294,
+			-.0717110667
+		],
+		[
+			-.0763729497,
+			-.421493324,
+			1.5869240244
+		]
+	], [
+		(color.l + .3963377774 * a + .2158037573 * b) ** 3,
+		(color.l - .1055613458 * a - .0638541728 * b) ** 3,
+		(color.l - .0894841775 * a - 1.291485548 * b) ** 3
+	]);
+	return multiply(space === "p3" ? XYZ_P3 : XYZ_RGB, xyz).map(encode);
+}
+function inGamut(color, space = "srgb") {
+	return colorToRgb(color, space).every((n) => n >= -1e-5 && n <= 1.00001);
+}
+/** Preserve lightness and hue when reducing chroma to an RGB gamut. */
+function fitGamut(color, space = "srgb") {
+	if (inGamut(color, space)) return color;
+	let lo = 0;
+	let hi = color.c;
+	for (let i = 0; i < 20; i++) {
+		const mid = (lo + hi) / 2;
+		if (inGamut({
+			...color,
+			c: mid
+		}, space)) lo = mid;
+		else hi = mid;
+	}
+	return {
+		...color,
+		c: lo
+	};
+}
+const round$1 = (v, digits = 4) => Number(v.toFixed(digits));
+function formatColor(color, format) {
+	const alpha = color.a < 1 ? ` / ${round$1(color.a)}` : "";
+	if (format === "oklch") return `oklch(${round$1(color.l)} ${round$1(color.c)} ${round$1(color.h, 2)}${alpha})`;
+	const rgb = colorToRgb(fitGamut(color, format === "p3" ? "p3" : "srgb"), format === "p3" ? "p3" : "srgb");
+	if (format === "p3") return `color(display-p3 ${rgb.map((n) => round$1(clamp$2(n), 5)).join(" ")}${alpha})`;
+	const bytes = rgb.map((n) => Math.round(clamp$2(n) * 255));
+	if (color.a < 1) bytes.push(Math.round(color.a * 255));
+	return "#" + bytes.map((n) => n.toString(16).padStart(2, "0")).join("");
+}
+const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?(%|deg|grad|rad|turn)?$/i;
+function number(value, percentScale = 1, hue = false) {
+	const match = value.match(NUMBER);
+	if (!match) return null;
+	const n = parseFloat(value);
+	if (!Number.isFinite(n)) return null;
+	const unit = match[1]?.toLowerCase();
+	if (hue) return unit === "rad" ? n * 180 / Math.PI : unit === "turn" ? n * 360 : unit === "grad" ? n * .9 : !unit || unit === "deg" ? n : null;
+	return unit === "%" ? n * percentScale / 100 : !unit ? n : null;
+}
+/** Absolute hex, RGB, HSL, OKLCH and Display P3 colors; no browser/DOM dependency. */
+function parseColor(value) {
+	const text = value.trim().toLowerCase();
+	if (text === "transparent") return {
+		l: 0,
+		c: 0,
+		h: 0,
+		a: 0
+	};
+	if (/^#(?:[\da-f]{3,4}|[\da-f]{6}|[\da-f]{8})$/.test(text)) {
+		let hex = text.slice(1);
+		if (hex.length <= 4) hex = [...hex].map((c) => c + c).join("");
+		const bytes = hex.match(/../g).map((c) => parseInt(c, 16) / 255);
+		return rgbToColor(bytes.slice(0, 3), bytes[3] ?? 1);
+	}
+	const match = text.match(/^(oklch|rgb|rgba|hsl|hsla|color)\(([^()]*)\)$/);
+	if (!match) return null;
+	const kind = match[1];
+	let body = match[2].trim();
+	const p3 = kind === "color";
+	if (p3) {
+		if (!body.startsWith("display-p3 ")) return null;
+		body = body.slice(11).trim();
+	}
+	const legacy = body.includes(",");
+	if (legacy && (p3 || kind === "oklch" || body.includes("/"))) return null;
+	const parts = legacy ? body.split(",").map((x) => x.trim()) : body.split(/\s*\/\s*/);
+	if (!legacy && parts.length > 2) return null;
+	const channels = legacy ? parts.slice(0, 3) : parts[0].split(/\s+/);
+	if (channels.length !== 3 || legacy && parts.length !== 3 && parts.length !== 4) return null;
+	if (legacy && kind.startsWith("rgb") && channels.some((c) => c.endsWith("%")) && !channels.every((c) => c.endsWith("%"))) return null;
+	const alphaText = legacy ? parts[3] : parts[1];
+	const alpha = alphaText === void 0 ? 1 : number(alphaText);
+	if (alpha === null) return null;
+	if (kind === "oklch") {
+		const l = number(channels[0]);
+		const c = number(channels[1], .4);
+		const h = number(channels[2], 1, true);
+		return l === null || c === null || h === null ? null : {
+			l: clamp$2(l),
+			c: Math.max(0, c),
+			h: wrapHue(h),
+			a: clamp$2(alpha)
+		};
+	}
+	if (kind.startsWith("hsl")) {
+		const h = number(channels[0], 1, true);
+		const s = number(channels[1]);
+		const l = number(channels[2]);
+		if (h === null || s === null || l === null || !channels[1].endsWith("%") || !channels[2].endsWith("%")) return null;
+		const sat = clamp$2(s), light = clamp$2(l);
+		const a = sat * Math.min(light, 1 - light);
+		const f = (n) => {
+			const k = (n + wrapHue(h) / 30) % 12;
+			return light - a * Math.max(-1, Math.min(k - 3, 9 - k, 1));
+		};
+		return rgbToColor([
+			f(0),
+			f(8),
+			f(4)
+		], alpha);
+	}
+	const values = channels.map((c) => number(c, p3 ? 1 : 255));
+	if (values.some((n) => n === null)) return null;
+	return rgbToColor(values.map((n) => p3 ? n : clamp$2(n / 255)), alpha, p3 ? "p3" : "srgb");
+}
+//#endregion
+//#region src/color/model.ts
+function hsvToRgb({ h, s, v }) {
+	const f = (n) => {
+		const k = (n + h / 60) % 6;
+		return v - v * s * Math.max(0, Math.min(k, 4 - k, 1));
+	};
+	return [
+		f(5),
+		f(3),
+		f(1)
+	];
+}
+function rgbToHsv([r, g, b], a = 1, prevH = 0) {
+	const max = Math.max(r, g, b);
+	const d = max - Math.min(r, g, b);
+	let h = prevH;
+	if (d > 1e-6) {
+		h = max === r ? (g - b) / d % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+		h = (h * 60 + 360) % 360;
+	}
+	return {
+		h,
+		s: max ? d / max : 0,
+		v: max,
+		a
+	};
+}
+const byte = (n) => Math.round(clamp$2(n) * 255);
+const hex2 = (n) => byte(n).toString(16).padStart(2, "0");
+function toHex(c, withAlpha = true) {
+	return "#" + hsvToRgb(c).map(hex2).join("") + (withAlpha && c.a < 1 ? hex2(c.a) : "");
+}
+function parseSolid(value, prevH) {
+	const parsed = parseColor(value);
+	if (!parsed) return null;
+	return rgbToHsv(colorToRgb(fitGamut(parsed)).map((n) => clamp$2(n)), parsed.a, prevH);
+}
+function formatOf(value) {
+	const v = value.trim().toLowerCase();
+	return v.startsWith("oklch(") ? "oklch" : v.startsWith("rgb") ? "rgb" : "hex";
+}
+function formatSolid(c, format) {
+	if (format === "hex") return toHex(c);
+	const rgb = hsvToRgb(c);
+	if (format === "oklch") return formatColor(rgbToColor(rgb, c.a), "oklch");
+	const alpha = c.a < 1 ? ` / ${Number(c.a.toFixed(3))}` : "";
+	return `rgb(${rgb.map(byte).join(" ")}${alpha})`;
+}
+function toOklch(c) {
+	const o = rgbToColor(hsvToRgb(c));
+	return [
+		o.l,
+		o.c,
+		o.h
+	];
+}
+/** Out-of-gamut input keeps lightness and hue and loses chroma, as designers expect. */
+function fromOklch(l, ch, h, prev) {
+	return rgbToHsv(colorToRgb(fitGamut({
+		l,
+		c: ch,
+		h,
+		a: 1
+	})).map((n) => clamp$2(n)), prev.a, prev.h);
+}
+const luminance = (rgb) => {
+	const [r, g, b] = rgb.map((c) => c <= .04045 ? c / 12.92 : ((c + .055) / 1.055) ** 2.4);
+	return .2126 * r + .7152 * g + .0722 * b;
+};
+/** WCAG 2 contrast ratio, compositing a translucent foreground over the background first. */
+function contrastRatio(fg, bg) {
+	const b = hsvToRgb(bg);
+	const [hi, lo] = [luminance(hsvToRgb(fg).map((c, i) => c * fg.a + b[i] * (1 - fg.a))), luminance(b)].sort((x, y) => y - x);
+	return (hi + .05) / (lo + .05);
+}
+function contrastGrade(ratio) {
+	return ratio >= 7 ? "AAA" : ratio >= 4.5 ? "AA" : ratio >= 3 ? "AA Large" : "Fail";
+}
+const isGradient = (value) => /^\s*(linear|radial|conic)-gradient\(/i.test(value);
+function gradientCss(g, asBar = false) {
+	const stops = [...g.stops].sort((a, b) => a.pos - b.pos).map((s) => `${toHex(s.color)} ${Math.round(s.pos * 1e3) / 10}%`).join(", ");
+	const interp = g.interp === "srgb" ? "" : ` in ${g.interp}`;
+	const angle = Math.round(g.angle);
+	if (asBar) return `linear-gradient(90deg${interp}, ${stops})`;
+	if (g.type === "radial") return `radial-gradient(circle${interp}, ${stops})`;
+	if (g.type === "conic") return `conic-gradient(from ${angle}deg${interp}, ${stops})`;
+	return `linear-gradient(${angle}deg${interp}, ${stops})`;
+}
+const SIDES = {
+	top: 0,
+	right: 90,
+	bottom: 180,
+	left: 270
+};
+/** Split on commas that aren't inside parentheses (stop colors like `rgb(1, 2, 3)`). */
+function splitTop(body) {
+	const out = [];
+	let depth = 0;
+	let start = 0;
+	for (let i = 0; i < body.length; i++) {
+		const ch = body[i];
+		if (ch === "(") depth++;
+		else if (ch === ")") depth--;
+		else if (ch === "," && depth === 0) {
+			out.push(body.slice(start, i).trim());
+			start = i + 1;
+		}
+	}
+	out.push(body.slice(start).trim());
+	return out;
+}
+/** Reads the gradients this picker writes, plus common hand-written ones. */
+function parseGradient(value) {
+	const m = value.trim().match(/^(linear|radial|conic)-gradient\(([\s\S]*)\)$/i);
+	if (!m) return null;
+	const type = m[1].toLowerCase();
+	const parts = splitTop(m[2]);
+	const g = {
+		type,
+		angle: type === "linear" ? 180 : 0,
+		interp: "srgb",
+		stops: []
+	};
+	const stopOf = (part) => {
+		const sm = part.match(/^(.*?)(?:\s+(-?[\d.]+)%)?$/);
+		const color = sm && parseSolid(sm[1]);
+		return color ? {
+			color,
+			pos: sm[2] === void 0 ? null : clamp$2(parseFloat(sm[2]) / 100)
+		} : null;
+	};
+	if (!stopOf(parts[0])) {
+		const header = parts.shift().toLowerCase();
+		const interp = header.match(/\bin\s+(srgb|oklab|oklch)\b/);
+		if (interp) g.interp = interp[1];
+		const deg = header.match(/(-?[\d.]+)deg/);
+		if (deg) g.angle = (parseFloat(deg[1]) % 360 + 360) % 360;
+		const side = header.match(/\bto\s+(top|right|bottom|left)\b/);
+		if (side) g.angle = SIDES[side[1]];
+	}
+	const raw = parts.map(stopOf);
+	if (raw.length < 2 || raw.some((s) => !s)) return null;
+	g.stops = raw.map((s, i) => ({
+		color: s.color,
+		pos: s.pos ?? i / (raw.length - 1)
+	}));
+	return g;
+}
+function gradientFromHexes(hexes) {
+	return {
+		type: "linear",
+		angle: 135,
+		interp: "oklab",
+		stops: hexes.map((h, i) => ({
+			pos: i / Math.max(1, hexes.length - 1),
+			color: parseSolid(h)
+		}))
+	};
+}
+/** Colour at `pos`, so a stop added mid-bar doesn't change how the gradient looks. */
+function sampleGradient(g, pos) {
+	const st = [...g.stops].sort((a, b) => a.pos - b.pos);
+	if (pos <= st[0].pos) return { ...st[0].color };
+	for (let i = 1; i < st.length; i++) {
+		const a = st[i - 1];
+		const b = st[i];
+		if (pos <= b.pos) {
+			const t = (pos - a.pos) / (b.pos - a.pos || 1);
+			const A = hsvToRgb(a.color);
+			const B = hsvToRgb(b.color);
+			return rgbToHsv(A.map((c, k) => c + (B[k] - c) * t), a.color.a + (b.color.a - a.color.a) * t);
+		}
+	}
+	return { ...st[st.length - 1].color };
+}
+/** Pixel coordinates within the visible grid; both axes must be within 8px. */
+function padGridIntersection(x, y, width, height) {
+	if (width <= 0 || height <= 0) return void 0;
+	const column = Math.round(x / width * 6);
+	const row = Math.round(y / height * 6);
+	if (column < 1 || column >= 6 || row < 1 || row >= 6) return void 0;
+	const target = {
+		x: column / 6 * width,
+		y: row / 6 * height
+	};
+	return Math.abs(x - target.x) <= 8 && Math.abs(y - target.y) <= 8 ? target : void 0;
+}
+function resolvePadAxis(config = [
+	0,
+	-1,
+	1,
+	.01
+]) {
+	const [initial, min, max, suppliedStep] = config;
+	const step = suppliedStep ?? (max - min) / 200;
+	if (![
+		initial,
+		min,
+		max,
+		step,
+		max - min
+	].every(Number.isFinite) || max <= min || step <= 0) throw new RangeError("DialPad axes need finite [default, min, max, step?] values, min < max, and a positive step.");
+	const axis = {
+		default: initial,
+		min,
+		max,
+		step
+	};
+	axis.default = snapPadAxis(initial, axis);
+	return axis;
+}
+function snapPadAxis(value, axis) {
+	if (!Number.isFinite(value)) return axis.default;
+	const clamped = Math.max(axis.min, Math.min(axis.max, value));
+	if (clamped === axis.min || clamped === axis.max) return clamped;
+	const snapped = axis.min + Math.round((clamped - axis.min) / axis.step) * axis.step;
+	return Math.max(axis.min, Math.min(axis.max, Number(snapped.toPrecision(12))));
+}
+function normalizePadValue(value, config = {}) {
+	const axes = {
+		x: resolvePadAxis(config.x),
+		y: resolvePadAxis(config.y)
+	};
+	const input = typeof value === "object" && value !== null ? value : {};
+	return {
+		x: typeof input.x === "number" ? snapPadAxis(input.x, axes.x) : axes.x.default,
+		y: typeof input.y === "number" ? snapPadAxis(input.y, axes.y) : axes.y.default
+	};
+}
+/** Screen coordinates: left/bottom are the minima, right/top the maxima. */
+function padValueFromPoint(x, y, config = {}) {
+	const horizontal = resolvePadAxis(config.x);
+	const vertical = resolvePadAxis(config.y);
+	return {
+		x: snapPadAxis(horizontal.min + x * (horizontal.max - horizontal.min), horizontal),
+		y: snapPadAxis(vertical.max - y * (vertical.max - vertical.min), vertical)
+	};
+}
+function padValueFromKey(value, key, shift, config = {}) {
+	const axis = key === "ArrowLeft" || key === "ArrowRight" ? "x" : key === "ArrowUp" || key === "ArrowDown" ? "y" : void 0;
+	if (!axis) return void 0;
+	const range = resolvePadAxis(config[axis]);
+	const direction = key === "ArrowRight" || key === "ArrowUp" ? 1 : -1;
+	return {
+		...value,
+		[axis]: snapPadAxis(value[axis] + direction * range.step * (shift ? 10 : 1), range)
+	};
+}
+//#endregion
 //#region src/config.ts
+/** Same inference dialkit applies to a bare number. */
+function inferRange(value) {
+	if (value >= 0 && value <= 1) return {
+		min: 0,
+		max: 1,
+		step: .01
+	};
+	if (value >= 0 && value <= 10) return {
+		min: 0,
+		max: value * 3 || 10,
+		step: .1
+	};
+	if (value >= 0 && value <= 100) return {
+		min: 0,
+		max: value * 3 || 100,
+		step: 1
+	};
+	if (value >= 0) return {
+		min: 0,
+		max: value * 3 || 1e3,
+		step: 10
+	};
+	return {
+		min: value * 3,
+		max: -value * 3,
+		step: 1
+	};
+}
+function toControl(input) {
+	if (Array.isArray(input)) {
+		const [value, min, max, step] = input;
+		return {
+			type: "slider",
+			value,
+			min,
+			max,
+			step
+		};
+	}
+	if (typeof input === "number") return {
+		type: "slider",
+		value: input,
+		...inferRange(input)
+	};
+	if (typeof input === "boolean") return {
+		type: "toggle",
+		value: input
+	};
+	if (typeof input === "string") {
+		if (isGradient(input) && parseGradient(input)) return {
+			type: "color",
+			value: input,
+			gradient: true
+		};
+		return parseColor(input) && input !== "transparent" ? {
+			type: "color",
+			value: input
+		} : {
+			type: "text",
+			value: input
+		};
+	}
+	if (typeof input === "object" && input !== null && "type" in input && typeof input.type === "string") {
+		const control = input;
+		return control.type === "folder" ? {
+			...control,
+			children: normalizeConfig(control.children)
+		} : control;
+	}
+	const { _collapsed, ...children } = input;
+	return {
+		type: "folder",
+		open: _collapsed === true ? false : true,
+		children: normalizeConfig(children)
+	};
+}
+/** Expand shorthand entries into explicit `{ type }` controls (idempotent). */
+function normalizeConfig(config) {
+	const out = {};
+	for (const [key, input] of Object.entries(config)) {
+		if (input === void 0) continue;
+		out[key] = toControl(input);
+	}
+	return out;
+}
 function parseConfig(config, prefix) {
 	const controls = [];
-	for (const [key, entry] of Object.entries(config)) {
+	for (const [key, entry] of Object.entries(normalizeConfig(config))) {
 		const meta = controlToMeta(entry, prefix ? `${prefix}.${key}` : key, formatLabel(key));
 		if (meta) controls.push(meta);
 	}
@@ -11,7 +582,7 @@ function parseConfig(config, prefix) {
 }
 function flattenValues(config, prefix) {
 	const values = {};
-	for (const [key, entry] of Object.entries(config)) {
+	for (const [key, entry] of Object.entries(normalizeConfig(config))) {
 		const path = prefix ? `${prefix}.${key}` : key;
 		switch (entry.type) {
 			case "slider":
@@ -41,6 +612,14 @@ function flattenValues(config, prefix) {
 				break;
 			case "easing":
 				values[path] = entry;
+				break;
+			case "image": {
+				const first = entry.options?.[0];
+				values[path] = entry.value ?? (typeof first === "string" ? first : first?.value ?? "");
+				break;
+			}
+			case "pad":
+				values[path] = normalizePadValue(void 0, entry);
 				break;
 			case "folder":
 				Object.assign(values, flattenValues(entry.children, path));
@@ -78,7 +657,9 @@ function controlToMeta(entry, path, label) {
 		case "color": return {
 			type: "color",
 			path,
-			label
+			label,
+			gradient: entry.gradient,
+			contrast: entry.contrast
 		};
 		case "text": return {
 			type: "text",
@@ -90,6 +671,22 @@ function controlToMeta(entry, path, label) {
 			type: "slot",
 			path,
 			label: entry.label ?? ""
+		};
+		case "image": return {
+			type: "image",
+			path,
+			label,
+			options: entry.options
+		};
+		case "pad": return {
+			type: "pad",
+			path,
+			label,
+			pad: {
+				x: entry.x,
+				y: entry.y,
+				labels: entry.labels
+			}
 		};
 		case "spring": return {
 			type: "transition",
@@ -126,8 +723,33 @@ function normalizeSelectOptions(options) {
 		label: opt.replace(/\b\w/g, (c) => c.toUpperCase())
 	} : opt);
 }
+function transitionModeOf(value) {
+	if (typeof value !== "object" || value === null || !("type" in value)) return "simple";
+	if (value.type === "easing") return "easing";
+	if (value.type !== "spring") return "simple";
+	const hasPhysics = value.stiffness !== void 0 || value.damping !== void 0 || value.mass !== void 0;
+	const hasTime = value.visualDuration !== void 0 || value.bounce !== void 0;
+	return hasPhysics && !hasTime ? "advanced" : "simple";
+}
+/** Keep values from `prev` that still exist in `defaults` with the same type. */
+function reconcileValues(prev, defaults) {
+	const next = {};
+	for (const [path, defaultValue] of Object.entries(defaults)) {
+		const old = prev[path];
+		next[path] = old !== void 0 && typeof old === typeof defaultValue ? old : defaultValue;
+	}
+	return next;
+}
 //#endregion
 //#region src/store.ts
+const isRecord = (v) => typeof v === "object" && v !== null && !Array.isArray(v);
+function attachShortcuts(controls, shortcuts) {
+	return controls.map((c) => ({
+		...c,
+		shortcut: shortcuts[c.path],
+		children: c.children && attachShortcuts(c.children, shortcuts)
+	}));
+}
 const EMPTY_VALUES = Object.freeze({});
 var PaneStoreClass = class {
 	panels = /* @__PURE__ */ new Map();
@@ -138,11 +760,12 @@ var PaneStoreClass = class {
 	presets = /* @__PURE__ */ new Map();
 	activePreset = /* @__PURE__ */ new Map();
 	baseValues = /* @__PURE__ */ new Map();
-	transitionModes = /* @__PURE__ */ new Map();
 	slotNodes = /* @__PURE__ */ new Map();
 	slotListeners = /* @__PURE__ */ new Map();
 	activeTabName = null;
 	activeTabListeners = /* @__PURE__ */ new Set();
+	defaults = /* @__PURE__ */ new Map();
+	persistTargets = /* @__PURE__ */ new Map();
 	setActiveTab(name) {
 		if (this.activeTabName === name) return;
 		this.activeTabName = name;
@@ -155,41 +778,61 @@ var PaneStoreClass = class {
 		this.activeTabListeners.add(listener);
 		return () => this.activeTabListeners.delete(listener);
 	}
-	registerPanel(id, name, config) {
-		const controls = parseConfig(config, "");
-		const values = flattenValues(config, "");
-		this.initTransitionModes(config, "", id);
+	registerPanel(id, name, config, options = {}) {
+		const shortcuts = options.shortcuts ?? {};
+		const controls = attachShortcuts(parseConfig(config, ""), shortcuts);
+		const defaults = flattenValues(config, "");
+		this.defaults.set(id, defaults);
+		const target = this.persistTarget(name, options.persist);
+		if (target) this.persistTargets.set(id, target);
+		else this.persistTargets.delete(id);
+		const saved = target ? this.loadPersisted(target) : null;
+		const values = saved?.values ? reconcileValues(saved.values, defaults) : { ...defaults };
 		this.panels.set(id, {
 			id,
 			name,
 			controls,
-			values
+			values,
+			shortcuts,
+			source: options.source
 		});
 		this.snapshots.set(id, { ...values });
-		this.baseValues.set(id, { ...values });
+		this.baseValues.set(id, saved?.baseValues ? reconcileValues(saved.baseValues, defaults) : { ...values });
+		if (saved?.presets) {
+			this.presets.set(id, saved.presets.map((p) => ({
+				...p,
+				values: reconcileValues(p.values, defaults)
+			})));
+			this.activePreset.set(id, saved.activePresetId ?? null);
+		}
+		this.persist(id);
 		this.notifyGlobal();
 	}
-	updatePanel(id, name, config) {
+	updatePanel(id, name, config, options = {}) {
 		const existing = this.panels.get(id);
 		if (!existing) {
-			this.registerPanel(id, name, config);
+			this.registerPanel(id, name, config, options);
 			return;
 		}
-		const controls = parseConfig(config, "");
+		const shortcuts = options.shortcuts ?? existing.shortcuts;
+		const controls = attachShortcuts(parseConfig(config, ""), shortcuts);
 		const newDefaults = flattenValues(config, "");
-		const nextValues = {};
-		for (const [path, defaultValue] of Object.entries(newDefaults)) {
-			const prev = existing.values[path];
-			nextValues[path] = prev !== void 0 && typeof prev === typeof defaultValue ? prev : defaultValue;
-		}
-		this.initTransitionModes(config, "", id);
+		this.defaults.set(id, newDefaults);
+		const nextValues = reconcileValues(existing.values, newDefaults);
+		const base = this.baseValues.get(id);
+		this.baseValues.set(id, reconcileValues(base ?? newDefaults, newDefaults));
+		for (const preset of this.presets.get(id) ?? []) preset.values = reconcileValues(preset.values, newDefaults);
+		const source = options.source ?? existing.source;
 		this.panels.set(id, {
 			id,
 			name,
 			controls,
-			values: nextValues
+			values: nextValues,
+			shortcuts,
+			source
 		});
 		this.snapshots.set(id, { ...nextValues });
+		this.persist(id);
 		this.notify(id);
 		this.notifyGlobal();
 	}
@@ -205,28 +848,59 @@ var PaneStoreClass = class {
 		this.snapshots.delete(id);
 		this.actionListeners.delete(id);
 		this.baseValues.delete(id);
+		this.presets.delete(id);
+		this.activePreset.delete(id);
+		this.defaults.delete(id);
+		this.persistTargets.delete(id);
 		this.notifyGlobal();
 	}
 	updateValue(panelId, path, value) {
+		this.updateValues(panelId, { [path]: value });
+	}
+	/** Write several dot-paths at once with a single notification. */
+	updateValues(panelId, updates) {
 		const panel = this.panels.get(panelId);
 		if (!panel) return;
-		panel.values[path] = value;
 		const activeId = this.activePreset.get(panelId);
-		if (activeId) {
-			const preset = (this.presets.get(panelId) ?? []).find((p) => p.id === activeId);
-			if (preset) preset.values[path] = value;
-		} else {
-			const base = this.baseValues.get(panelId);
-			if (base) base[path] = value;
+		const target = activeId ? this.presets.get(panelId)?.find((p) => p.id === activeId)?.values : this.baseValues.get(panelId);
+		for (const [path, value] of Object.entries(updates)) {
+			if (!(path in panel.values)) continue;
+			panel.values[path] = value;
+			if (target) target[path] = value;
 		}
 		this.snapshots.set(panelId, { ...panel.values });
+		this.persist(panelId);
 		this.notify(panelId);
+	}
+	/** Restore the config defaults in the active version. */
+	resetValues(panelId) {
+		const defaults = this.defaults.get(panelId);
+		if (defaults) this.updateValues(panelId, { ...defaults });
 	}
 	getValue(panelId, path) {
 		return this.panels.get(panelId)?.values[path];
 	}
 	getValues(panelId) {
 		return this.snapshots.get(panelId) ?? EMPTY_VALUES;
+	}
+	getDefaults(panelId) {
+		return this.defaults.get(panelId) ?? EMPTY_VALUES;
+	}
+	/** Values without action/slot placeholders, which carry config rather than state. */
+	getTunableValues(panelId) {
+		const out = {};
+		for (const [path, value] of Object.entries(this.getValues(panelId))) {
+			const type = typeof value === "object" && value !== null ? value.type : null;
+			if (type !== "action" && type !== "slot") out[path] = value;
+		}
+		return out;
+	}
+	/** Values that differ from the config defaults: what a tuning session actually decided. */
+	getChangedValues(panelId) {
+		const defaults = this.getDefaults(panelId);
+		const changed = {};
+		for (const [path, value] of Object.entries(this.getTunableValues(panelId))) if (JSON.stringify(value) !== JSON.stringify(defaults[path])) changed[path] = value;
+		return changed;
 	}
 	getPanels() {
 		return Array.from(this.panels.values());
@@ -296,6 +970,7 @@ var PaneStoreClass = class {
 		this.presets.set(panelId, [...existing, preset]);
 		this.activePreset.set(panelId, id);
 		this.snapshots.set(panelId, { ...panel.values });
+		this.persist(panelId);
 		this.notify(panelId);
 		return id;
 	}
@@ -307,6 +982,7 @@ var PaneStoreClass = class {
 		panel.values = { ...preset.values };
 		this.snapshots.set(panelId, { ...panel.values });
 		this.activePreset.set(panelId, presetId);
+		this.persist(panelId);
 		this.notify(panelId);
 	}
 	deletePreset(panelId, presetId) {
@@ -315,6 +991,7 @@ var PaneStoreClass = class {
 		if (this.activePreset.get(panelId) === presetId) this.activePreset.set(panelId, null);
 		const panel = this.panels.get(panelId);
 		if (panel) this.snapshots.set(panelId, { ...panel.values });
+		this.persist(panelId);
 		this.notify(panelId);
 	}
 	clearActivePreset(panelId) {
@@ -325,6 +1002,7 @@ var PaneStoreClass = class {
 			this.snapshots.set(panelId, { ...panel.values });
 		}
 		this.activePreset.set(panelId, null);
+		this.persist(panelId);
 		this.notify(panelId);
 	}
 	getPresets(panelId) {
@@ -334,22 +1012,63 @@ var PaneStoreClass = class {
 		return this.activePreset.get(panelId) ?? null;
 	}
 	getTransitionMode(panelId, path) {
-		return this.transitionModes.get(`${panelId}:${path}`) ?? "simple";
+		return transitionModeOf(this.getValue(panelId, path));
 	}
-	setTransitionMode(panelId, path, mode) {
-		this.transitionModes.set(`${panelId}:${path}`, mode);
-		this.notify(panelId);
+	persistTarget(name, persist) {
+		if (!persist) return null;
+		const o = typeof persist === "object" ? persist : {};
+		return {
+			key: o.key ?? `uipane:${name}`,
+			storage: o.storage ?? "localStorage",
+			presets: o.presets ?? true
+		};
 	}
-	initTransitionModes(config, prefix, panelId) {
-		for (const [key, entry] of Object.entries(config)) {
-			const path = prefix ? `${prefix}.${key}` : key;
-			if (entry.type === "easing") this.transitionModes.set(`${panelId}:${path}`, "easing");
-			else if (entry.type === "spring") {
-				const hasPhysics = entry.stiffness !== void 0 || entry.damping !== void 0 || entry.mass !== void 0;
-				const hasTime = entry.visualDuration !== void 0 || entry.bounce !== void 0;
-				this.transitionModes.set(`${panelId}:${path}`, hasPhysics && !hasTime ? "advanced" : "simple");
-			} else if (entry.type === "folder") this.initTransitionModes(entry.children, path, panelId);
+	storage(kind) {
+		try {
+			return typeof window === "undefined" ? null : window[kind];
+		} catch {
+			return null;
 		}
+	}
+	loadPersisted(target) {
+		try {
+			const raw = this.storage(target.storage)?.getItem(target.key);
+			if (!raw) return null;
+			const parsed = JSON.parse(raw);
+			if (!isRecord(parsed) || parsed.version !== 1) return null;
+			const values = isRecord(parsed.values) ? parsed.values : void 0;
+			if (!target.presets) return {
+				version: 1,
+				values
+			};
+			const presets = Array.isArray(parsed.presets) ? parsed.presets.filter((p) => isRecord(p) && typeof p.id === "string" && typeof p.name === "string" && isRecord(p.values)) : [];
+			return {
+				version: 1,
+				values,
+				baseValues: isRecord(parsed.baseValues) ? parsed.baseValues : values,
+				presets,
+				activePresetId: presets.some((p) => p.id === parsed.activePresetId) ? parsed.activePresetId : null
+			};
+		} catch {
+			return null;
+		}
+	}
+	persist(panelId) {
+		const target = this.persistTargets.get(panelId);
+		const values = this.snapshots.get(panelId);
+		if (!target || !values) return;
+		const state = {
+			version: 1,
+			values
+		};
+		if (target.presets) {
+			state.baseValues = this.baseValues.get(panelId) ?? values;
+			state.presets = this.presets.get(panelId) ?? [];
+			state.activePresetId = this.activePreset.get(panelId) ?? null;
+		}
+		try {
+			this.storage(target.storage)?.setItem(target.key, JSON.stringify(state));
+		} catch {}
 	}
 	notify(panelId) {
 		this.listeners.get(panelId)?.forEach((fn) => fn());
@@ -362,14 +1081,27 @@ const PaneStore = new PaneStoreClass();
 //#endregion
 //#region src/react/usePane.ts
 function usePane(name, config, options) {
-	const panelId = `${name}-${useId()}`;
+	return usePaneController(name, config, options).values;
+}
+function usePaneController(name, config, options) {
+	const instanceId = useId();
+	const panelId = options?.id ?? `${name}-${instanceId}`;
 	const configRef = useRef(config);
 	configRef.current = config;
 	const serialized = JSON.stringify(config);
+	const [source] = useState(callerModule);
+	const panelOptions = {
+		persist: options?.persist,
+		shortcuts: options?.shortcuts,
+		source
+	};
+	const optionsRef = useRef(panelOptions);
+	optionsRef.current = panelOptions;
+	const serializedOptions = JSON.stringify(panelOptions);
 	const onActionRef = useRef(options?.onAction);
 	onActionRef.current = options?.onAction;
 	useEffect(() => {
-		PaneStore.registerPanel(panelId, name, configRef.current);
+		PaneStore.registerPanel(panelId, name, configRef.current, optionsRef.current);
 		return () => PaneStore.unregisterPanel(panelId);
 	}, [panelId, name]);
 	const mountedRef = useRef(false);
@@ -378,57 +1110,79 @@ function usePane(name, config, options) {
 			mountedRef.current = true;
 			return;
 		}
-		PaneStore.updatePanel(panelId, name, configRef.current);
+		PaneStore.updatePanel(panelId, name, configRef.current, optionsRef.current);
 	}, [
 		panelId,
 		name,
-		serialized
+		serialized,
+		serializedOptions
 	]);
 	useEffect(() => {
 		return PaneStore.subscribeActions(panelId, (action) => {
 			onActionRef.current?.(action);
 		});
 	}, [panelId]);
-	return buildResolved(config, useSyncExternalStore((cb) => PaneStore.subscribe(panelId, cb), () => PaneStore.getValues(panelId), () => PaneStore.getValues(panelId)), "");
+	const flat = useSyncExternalStore((cb) => PaneStore.subscribe(panelId, cb), () => PaneStore.getValues(panelId), () => PaneStore.getValues(panelId));
+	const values = useMemo(() => resolveValues(configRef.current, flat), [flat, serialized]);
+	const setValue = useCallback((path, value) => PaneStore.updateValue(panelId, path, value), [panelId]);
+	const setValues = useCallback((nested) => PaneStore.updateValues(panelId, flattenUpdates(nested)), [panelId]);
+	const resetValues = useCallback(() => PaneStore.resetValues(panelId), [panelId]);
+	const getValues = useCallback(() => resolveValues(configRef.current, PaneStore.getValues(panelId)), [panelId]);
+	return useMemo(() => ({
+		id: panelId,
+		values,
+		getValues,
+		setValue,
+		setValues,
+		resetValues
+	}), [
+		panelId,
+		values,
+		getValues,
+		setValue,
+		setValues,
+		resetValues
+	]);
 }
-function buildResolved(config, flat, prefix) {
-	const result = {};
-	for (const [key, entry] of Object.entries(config)) {
-		const path = prefix ? `${prefix}.${key}` : key;
-		switch (entry.type) {
-			case "action": break;
-			case "slot": break;
-			case "slider":
-				result[key] = flat[path] ?? entry.value;
-				break;
-			case "toggle":
-				result[key] = flat[path] ?? entry.value;
-				break;
-			case "select": {
-				const cfg = entry;
-				const first = cfg.options[0];
-				const firstVal = typeof first === "string" ? first : first?.value ?? "";
-				result[key] = flat[path] ?? cfg.value ?? firstVal;
-				break;
-			}
-			case "color":
-				result[key] = flat[path] ?? entry.value ?? "#000000";
-				break;
-			case "text":
-				result[key] = flat[path] ?? entry.value ?? "";
-				break;
-			case "spring":
-				result[key] = flat[path] ?? entry;
-				break;
-			case "easing":
-				result[key] = flat[path] ?? entry;
-				break;
-			case "folder":
-				result[key] = buildResolved(entry.children, flat, path);
-				break;
-		}
+/**
+* The module that called usePane, from the stack: the first frame outside this
+* file. Only the file is kept; dev transforms shift line numbers, so a line
+* would point at the wrong place.
+*/
+function callerModule() {
+	const urls = ((/* @__PURE__ */ new Error()).stack ?? "").split("\n").map((line) => line.match(/((?:https?|file):\/\/[^\s)]+?)(?::\d+){1,2}\)?\s*$/)?.[1]).filter((url) => !!url);
+	const own = urls[0];
+	const caller = urls.find((url) => url !== own && !url.includes("/node_modules/"));
+	if (!caller) return void 0;
+	try {
+		const { pathname } = new URL(caller);
+		return decodeURIComponent(pathname.startsWith("/@fs/") ? pathname.slice(4) : pathname.slice(1));
+	} catch {
+		return;
 	}
-	return result;
+}
+function resolveValues(config, flat) {
+	const defaults = flattenValues(config, "");
+	return build(config, "");
+	function build(cfg, prefix) {
+		const result = {};
+		for (const [key, entry] of Object.entries(normalizeConfig(cfg))) {
+			const path = prefix ? `${prefix}.${key}` : key;
+			if (entry.type === "action" || entry.type === "slot") continue;
+			result[key] = entry.type === "folder" ? build(entry.children, path) : flat[path] ?? defaults[path];
+		}
+		return result;
+	}
+}
+/** `{ a: { b: 1 } }` → `{ "a.b": 1 }`, treating `{ type }` and `{ x, y }` objects as leaves. */
+function flattenUpdates(nested, prefix = "") {
+	const out = {};
+	for (const [key, value] of Object.entries(nested)) {
+		const path = prefix ? `${prefix}.${key}` : key;
+		if (typeof value === "object" && value !== null && !Array.isArray(value) && !("type" in value) && !("x" in value && "y" in value)) Object.assign(out, flattenUpdates(value, path));
+		else out[path] = value;
+	}
+	return out;
 }
 //#endregion
 //#region node_modules/.pnpm/preact@10.29.0/node_modules/preact/dist/preact.mjs
@@ -475,7 +1229,7 @@ function S(n, l) {
 	for (var u; l < n.__k.length; l++) if (null != (u = n.__k[l]) && null != u.__e) return u.__e;
 	return "function" == typeof n.type ? S(n) : null;
 }
-function C$1(n) {
+function C$2(n) {
 	if (n.__P && n.__d) {
 		var u = n.__v, t = u.__e, i = [], r = [], o = w$1({}, u);
 		o.__v = u.__v + 1, l$1.vnode && l$1.vnode(o), z$1(n.__P, o, u, n.__n, n.__P.namespaceURI, 32 & u.__u ? [t] : null, i, null == t ? S(u) : t, !!(32 & u.__u), r), o.__v = u.__v, o.__.__k[o.__i] = o, V$1(i, o, r), u.__e = u.__ = null, o.__e != t && M$1(o);
@@ -491,7 +1245,7 @@ function $$1(n) {
 }
 function I() {
 	try {
-		for (var n, l = 1; i$2.length;) i$2.length > l && i$2.sort(e$1), n = i$2.shift(), l = i$2.length, C$1(n);
+		for (var n, l = 1; i$2.length;) i$2.length > l && i$2.sort(e$1), n = i$2.shift(), l = i$2.length, C$2(n);
 	} finally {
 		i$2.length = I.__r = 0;
 	}
@@ -706,7 +1460,8 @@ const STYLES = `
 /* Variables                                                          */
 /* ------------------------------------------------------------------ */
 
-.up-root {
+.up-root,
+.up-portal {
   --up-bg: #0A0A0A;
   --up-surface: #141414;
   --up-surface-hover: #1a1a1a;
@@ -853,29 +1608,118 @@ const STYLES = `
 /* Collapsed tab                                                      */
 /* ------------------------------------------------------------------ */
 
+/* Edge-docked handle: flush to the screen edge it was dragged off, rounded
+   on the inner side only, so it reads as a drawer pull rather than a button. */
 .up-collapsed {
   position: fixed;
   z-index: 2147483647;
-  width: 36px;
-  height: 36px;
-  background: var(--up-bg);
-  border: 1px solid var(--up-border);
-  border-radius: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  cursor: grab;
-  transition: transform 0.25s cubic-bezier(0,0,0.2,1), opacity 0.15s;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  padding: 0;
+  font: inherit;
   color: var(--up-text-3);
+  background: linear-gradient(180deg, #151515, var(--up-bg));
+  border: 1px solid var(--up-border-hover);
+  box-shadow: 0 8px 28px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.04);
+  cursor: pointer;
+  touch-action: none;
+  transition:
+    left 0.3s cubic-bezier(0.2, 0.9, 0.3, 1),
+    top 0.3s cubic-bezier(0.2, 0.9, 0.3, 1),
+    width 0.2s cubic-bezier(0,0,0.2,1),
+    height 0.2s cubic-bezier(0,0,0.2,1),
+    transform 0.2s cubic-bezier(0,0,0.2,1),
+    color 0.15s, background 0.15s, box-shadow 0.2s;
 }
 
-.up-collapsed:hover { background: var(--up-surface); color: var(--up-text-1); }
-.up-collapsed:active { cursor: grabbing; }
 
-.up-collapsed svg {
+.up-collapsed-dragging {
+  transition: none;
+  cursor: grabbing;
+  transform: scale(1.04) !important;
+  border-radius: 10px !important;
+  border: 1px solid var(--up-border-hover) !important;
+  box-shadow: 0 16px 40px rgba(0,0,0,0.6);
+  animation: none;
+}
+
+/* Released here, the panel opens instead of re-docking. */
+.up-collapsed-will-expand {
+  color: var(--up-text-1);
+  border-color: #3a3270 !important;
+  box-shadow: 0 0 0 4px rgba(139,123,255,0.18), 0 16px 40px rgba(0,0,0,0.6);
+}
+
+.up-collapsed-left   { border-left: none;   border-radius: 0 10px 10px 0; }
+.up-collapsed-right  { border-right: none;  border-radius: 10px 0 0 10px; }
+.up-collapsed-top    { border-top: none;    border-radius: 0 0 10px 10px; }
+.up-collapsed-bottom { border-bottom: none; border-radius: 10px 10px 0 0; }
+
+/* Magnet points, shown only while the handle is dragged. */
+.up-dock-mark {
+  position: fixed;
+  z-index: 2147483646;
+  pointer-events: none;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  background: rgba(255, 255, 255, 0.03);
+  transition: background 0.15s, border-color 0.15s;
+}
+.up-dock-mark-left   { border-left: none;   border-radius: 0 10px 10px 0; }
+.up-dock-mark-right  { border-right: none;  border-radius: 10px 0 0 10px; }
+.up-dock-mark-top    { border-top: none;    border-radius: 0 0 10px 10px; }
+.up-dock-mark-bottom { border-bottom: none; border-radius: 10px 10px 0 0; }
+.up-dock-mark-on {
+  border-style: solid;
+  border-color: rgba(139, 123, 255, 0.7);
+  background: rgba(139, 123, 255, 0.12);
+}
+
+/* Slide in only when the panel is first pushed off-screen, not on re-docks. */
+.up-collapsed-enter.up-collapsed-left   { animation: up-dock-left 0.3s cubic-bezier(0,0,0.2,1); }
+.up-collapsed-enter.up-collapsed-right  { animation: up-dock-right 0.3s cubic-bezier(0,0,0.2,1); }
+.up-collapsed-enter.up-collapsed-top    { animation: up-dock-top 0.3s cubic-bezier(0,0,0.2,1); }
+.up-collapsed-enter.up-collapsed-bottom { animation: up-dock-bottom 0.3s cubic-bezier(0,0,0.2,1); }
+
+@keyframes up-dock-left   { from { transform: translateX(-100%); } }
+@keyframes up-dock-right  { from { transform: translateX(100%); } }
+@keyframes up-dock-top    { from { transform: translateY(-100%); } }
+@keyframes up-dock-bottom { from { transform: translateY(100%); } }
+
+.up-collapsed:hover,
+.up-collapsed:focus-visible {
+  color: var(--up-text-1);
+  background: linear-gradient(180deg, #1c1c1c, #111);
+  box-shadow: 0 10px 32px rgba(0,0,0,0.6), inset 0 1px 0 rgba(255,255,255,0.06);
+  outline: none;
+}
+
+.up-collapsed:focus-visible { border-color: #3a3a3a; }
+
+/* Nudge toward the content on hover to hint "pull me out". */
+.up-collapsed-left:hover   { transform: translateX(3px); }
+.up-collapsed-right:hover  { transform: translateX(-3px); }
+.up-collapsed-top:hover    { transform: translateY(3px); }
+.up-collapsed-bottom:hover { transform: translateY(-3px); }
+
+.up-knob-arrow {
   width: 16px;
   height: 16px;
+  flex-shrink: 0;
+  overflow: visible;
+  transition: transform 0.25s cubic-bezier(0.3, 1.4, 0.5, 1);
+}
+/* Drawn pointing right; turned so the arrow always faces into the screen. */
+.up-collapsed-right .up-knob-arrow  { transform: rotate(180deg); }
+.up-collapsed-top .up-knob-arrow    { transform: rotate(90deg); }
+.up-collapsed-bottom .up-knob-arrow { transform: rotate(-90deg); }
+.up-knob-arrow-k2 { color: #8b7bff; }
+.up-knob-arrow-k { transition: transform 0.35s cubic-bezier(0.3, 1.4, 0.5, 1); }
+/* On hover the outer knobs slide level with the middle one. */
+.up-collapsed:hover .up-knob-arrow-k { transform: translateX(6px); }
+
+@media (prefers-reduced-motion: reduce) {
+  .up-collapsed, .up-knob-arrow, .up-knob-arrow-k { transition: none; animation: none; }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1144,7 +1988,9 @@ const STYLES = `
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
   width: 100%;
+  user-select: none;
   height: var(--up-row-h);
   padding: 0 12px;
   font-family: inherit;
@@ -1167,10 +2013,56 @@ const STYLES = `
   gap: 6px;
 }
 
+.up-select-label { flex-shrink: 0; }
+
+/* Baseline, not center: the smaller position number should sit on the value's text line. */
+.up-select-current {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  min-width: 0;
+}
+
 .up-select-value {
   font-size: 13px;
   font-weight: 500;
-  color: var(--up-text-3);
+  color: var(--up-text-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Position dots: where the current value sits in the list. */
+.up-select-pos {
+  font: 11px ui-monospace, 'SF Mono', Menlo, monospace;
+  color: var(--up-text-4);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
+
+.up-select-steps { display: flex; margin-right: -6px; }
+.up-select-step {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--up-text-4);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.up-select-step:hover { background: var(--up-surface-active); color: var(--up-text-1); }
+.up-select-step svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .up-select-chevron {
@@ -1184,12 +2076,14 @@ const STYLES = `
 .up-select-chevron-open { transform: rotate(180deg); }
 
 .up-select-dropdown {
-  position: absolute;
+  position: fixed;
+  display: flex;
+  flex-direction: column;
   background: #1a1a1a;
   border: 1px solid var(--up-border-hover);
   border-radius: var(--up-radius);
   padding: 4px;
-  z-index: 10;
+  z-index: 1;
   box-shadow: 0 8px 24px rgba(0,0,0,0.5);
   animation: up-dropdown-in 0.15s cubic-bezier(0,0,0.2,1);
 }
@@ -1200,7 +2094,10 @@ const STYLES = `
 }
 
 .up-select-option {
-  display: block;
+  appearance: none;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   width: 100%;
   padding: 8px 10px;
   font-family: inherit;
@@ -1215,8 +2112,14 @@ const STYLES = `
   transition: background var(--up-transition);
 }
 
-.up-select-option:hover { background: var(--up-surface-hover); }
-.up-select-option-selected { color: var(--up-text-1); background: var(--up-surface-active); }
+.up-select-option-selected { color: var(--up-text-1); }
+.up-select-option-highlight { background: var(--up-surface-hover); color: var(--up-text-1); }
+.up-select-check {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #8b7bff;
+}
 
 /* ------------------------------------------------------------------ */
 /* Text input                                                         */
@@ -1333,10 +2236,43 @@ const STYLES = `
 /* ------------------------------------------------------------------ */
 
 .up-viz {
+  display: block;
   width: 100%;
-  border-radius: var(--up-radius);
+  border-radius: 10px;
   background: var(--up-surface);
   overflow: visible;
+}
+
+.up-viz-grid line { stroke: rgba(255,255,255,0.08); stroke-width: 1; }
+.up-viz-target { stroke: rgba(255,255,255,0.15); stroke-width: 1; stroke-dasharray: 4 4; }
+.up-viz-curve {
+  fill: none;
+  stroke: rgba(255,255,255,0.7);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.up-ease-input {
+  width: 150px;
+  text-align: right;
+  font-family: ui-monospace, 'SF Mono', Menlo, monospace;
+  font-size: 12px;
+}
+
+/* ------------------------------------------------------------------ */
+/* Keyboard focus                                                     */
+/* ------------------------------------------------------------------ */
+
+.up-root :where(button, input, textarea, [tabindex]):focus { outline: none; }
+.up-root :where(button, [role="slider"], [role="button"], [role="combobox"], [role="radio"], .dialkit-color-plane, .dialkit-pad-surface):focus-visible,
+.up-portal :where(button, [tabindex], .dialkit-color-plane):focus-visible {
+  outline: 2px solid rgba(255,255,255,0.6);
+  outline-offset: -2px;
+}
+.up-slider:focus-visible .up-slider-value { color: var(--up-text-1); }
+@media (forced-colors: active) {
+  .up-root :where(button, [role="slider"], [role="combobox"]):focus-visible { outline-color: Highlight; }
 }
 
 /* ------------------------------------------------------------------ */
@@ -1395,7 +2331,7 @@ const STYLES = `
 }
 
 .up-preset-dropdown {
-  position: absolute;
+  position: fixed;
   background: #1a1a1a;
   border: 1px solid var(--up-border-hover);
   border-radius: 10px;
@@ -1498,6 +2434,67 @@ const STYLES = `
   padding: 0 2px;
 }
 
+/* Stacked layout: each panel is a top-level collapsible section. */
+.up-folder-section {
+  margin: 0;
+}
+
+.up-folder-section + .up-folder-section {
+  border-top: 1px solid var(--up-border);
+}
+
+/* The section head (title + versions) pins while its controls scroll beneath. */
+.up-folder-section > .up-folder-head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: var(--up-bg);
+}
+
+/* Cover .up-content's side padding so rows don't show through the gutters. */
+.up-folder-section > .up-folder-head::before {
+  content: '';
+  position: absolute;
+  inset: 0 -12px;
+  z-index: -1;
+  background: var(--up-bg);
+}
+
+.up-folder-section > .up-folder-head > .up-folder-header {
+  height: 44px;
+}
+
+.up-folder-section > .up-folder-head .up-folder-title {
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 20px;
+  color: var(--up-text-1);
+}
+
+.up-folder-toolbar {
+  padding: 4px 0 6px;
+}
+
+.up-folder-toolbar .up-preset-bar {
+  padding: 0;
+  border-bottom: none;
+}
+
+.up-folder-section > .up-folder-content > .up-folder-inner {
+  padding-bottom: 12px;
+}
+
+/* Nested groups read as blocks between hairlines; adjacent ones share one. */
+.up-content-stacked .up-folder:not(.up-folder-section) {
+  margin: 4px 0;
+  border-top: 1px solid var(--up-border);
+  border-bottom: 1px solid var(--up-border);
+}
+
+.up-content-stacked .up-folder:not(.up-folder-section) + .up-folder:not(.up-folder-section) {
+  margin-top: -5px;
+}
+
 /* ------------------------------------------------------------------ */
 /* Panel section                                                      */
 /* ------------------------------------------------------------------ */
@@ -1536,6 +2533,721 @@ const STYLES = `
 
 .up-portal > * {
   pointer-events: auto;
+}
+
+.up-overlay-backdrop {
+  position: fixed;
+  inset: 0;
+}
+
+/* ------------------------------------------------------------------ */
+/* Color picker                                                       */
+/* ------------------------------------------------------------------ */
+
+.up-portal {
+  --up-checker: repeating-conic-gradient(#2a2a2a 0 25%, #1a1a1a 0 50%) 0 0 / 10px 10px;
+  --up-accent: #8b7bff;
+}
+
+.up-cp-swatch {
+  background: var(--up-swatch), repeating-conic-gradient(#aaa 0% 25%, #eee 0% 50%) 0 / 8px 8px;
+}
+
+/* The popover is promoted to the top layer ([popover]); undo the UA popover box. */
+.up-cp-pop {
+  inset: auto;
+  margin: 0;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  color: var(--up-text-2);
+  background: var(--up-bg);
+  border: 1px solid var(--up-border-hover);
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+  font: 13px/1.4 system-ui, -apple-system, sans-serif;
+  user-select: none;
+  animation: up-cp-enter 0.16s ease-out;
+}
+.up-cp-pop::-webkit-scrollbar { display: none; }
+@keyframes up-cp-enter { from { opacity: 0; transform: translateY(3px) scale(0.98); } to { opacity: 1; transform: none; } }
+
+.up-cp-pop svg { flex-shrink: 0; }
+.up-cp-pop button { font-family: inherit; }
+
+.up-cp-tabs { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: var(--up-surface); flex-shrink: 0; }
+.up-cp-tab {
+  flex: 1; height: 26px; display: flex; align-items: center; justify-content: center; gap: 5px;
+  border: 0; border-radius: 7px; background: none; color: var(--up-text-4);
+  font-size: 12px; font-weight: 500; cursor: pointer;
+}
+.up-cp-tab:hover { color: var(--up-text-2); }
+.up-cp-tab-on { background: var(--up-surface-active); color: var(--up-text-1); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4); }
+.up-cp-tab svg { width: 14px; height: 14px; }
+
+.up-cp-editor, .up-cp-gradient { display: flex; flex-direction: column; gap: 10px; outline: none; }
+.up-cp-row { display: flex; align-items: center; gap: 8px; }
+.up-cp-between { justify-content: space-between; }
+.up-cp-hint { font-size: 10.5px; color: var(--up-text-4); }
+.up-cp-hidden { visibility: hidden; }
+
+.up-cp-area { position: relative; height: 150px; border-radius: 9px; cursor: crosshair; touch-action: none; flex-shrink: 0; }
+.up-cp-thumb {
+  position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4), 0 2px 6px rgba(0, 0, 0, 0.4);
+  transform: translate(-50%, -50%); pointer-events: none;
+}
+.up-cp-sliders { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+.up-cp-slider { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none; }
+.up-cp-slider .up-cp-thumb { top: 50%; width: 14px; height: 14px; }
+.up-cp-hue { background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+.up-cp-alpha { background: var(--up-checker); }
+.up-cp-alpha > b { position: absolute; inset: 0; border-radius: 6px; }
+.up-cp-preview { position: relative; width: 30px; height: 30px; border-radius: 8px; overflow: hidden; background: var(--up-checker); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); flex-shrink: 0; }
+.up-cp-preview > b { position: absolute; inset: 0; }
+.up-cp-icon-btn {
+  width: 30px; height: 30px; display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+  border: 0; border-radius: 8px; background: var(--up-surface); color: var(--up-text-3); cursor: pointer;
+}
+.up-cp-icon-btn:hover { color: var(--up-text-1); background: var(--up-surface-active); }
+.up-cp-icon-btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+.up-cp-dots { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px 0; justify-items: center; }
+.up-cp-dot {
+  width: 24px; height: 24px; padding: 0; border: 0; border-radius: 50%;
+  background: var(--c); cursor: pointer; transition: transform 0.12s, box-shadow 0.12s;
+}
+.up-cp-dot:hover { transform: scale(1.12); }
+.up-cp-dot-light { box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12); }
+.up-cp-dot-on { box-shadow: inset 0 0 0 2px var(--c), inset 0 0 0 4px var(--up-bg); }
+.up-cp-dot-light.up-cp-dot-on { box-shadow: inset 0 0 0 2px var(--c), inset 0 0 0 4px var(--up-bg), 0 0 0 1px rgba(255, 255, 255, 0.2); }
+.up-cp-dots-label { margin: 8px 0 6px; font-size: 10px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--up-text-4); }
+
+.up-cp-fields { display: flex; gap: 3px; }
+.up-cp-format {
+  height: 28px; padding: 0 5px; display: flex; align-items: center; gap: 3px; flex-shrink: 0;
+  border: 0; border-radius: 7px; background: var(--up-surface); color: var(--up-text-3);
+  font-size: 10px; font-weight: 600; letter-spacing: 0.04em; cursor: pointer;
+}
+.up-cp-format:hover { color: var(--up-text-1); }
+.up-cp-format svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+
+.up-cp-field {
+  flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; padding-left: 6px;
+  border-radius: 7px; background: var(--up-surface); cursor: ew-resize;
+  box-shadow: inset 0 0 0 1px transparent; transition: box-shadow 0.12s, background 0.12s;
+}
+.up-cp-field:hover { background: var(--up-surface-active); }
+.up-cp-field-text { flex: 2.2; cursor: text; }
+.up-cp-field-wide { flex: 1.25; }
+.up-cp-field-alpha { flex: 1.2; }
+.up-cp-field-angle { flex: 0 0 74px; }
+.up-cp-field-scrubbing { box-shadow: inset 0 0 0 1px var(--up-accent); background: #1d1a33; }
+.up-cp-field:focus-within { box-shadow: inset 0 0 0 1px #3a3a3a; }
+.up-cp-field > span { margin-right: 2px; flex-shrink: 0; font-size: 10px; font-weight: 600; color: var(--up-text-4); }
+.up-cp-field-scrubbing > span { color: var(--up-accent); }
+.up-cp-field input {
+  width: 100%; min-width: 0; padding: 0 5px 0 0; border: 0; outline: 0; background: none;
+  color: var(--up-text-1); font: 11px ui-monospace, 'SF Mono', Menlo, monospace; letter-spacing: -0.02em;
+  text-align: right; cursor: inherit; pointer-events: none;
+}
+.up-cp-field-text input, .up-cp-field-editing input { pointer-events: auto; cursor: text; text-align: left; }
+/* No selectable text while scrubbing: a drag over a selection is what wakes PopClip-style tools. */
+.up-cp-field, .up-cp-field input { -webkit-user-select: none; user-select: none; }
+.up-cp-field-text input, .up-cp-field-editing input { -webkit-user-select: text; user-select: text; }
+
+.up-vcursor {
+  position: fixed; z-index: 2147483647; width: 24px; height: 24px; margin: -12px 0 0 -12px;
+  pointer-events: none; display: none; filter: drop-shadow(0 1px 1px rgba(0, 0, 0, 0.6));
+}
+.up-vcursor-on { display: block; }
+
+.up-cp-contrast {
+  display: flex; align-items: center; gap: 8px; height: 28px; padding: 0 8px 0 3px;
+  border: 0; border-radius: 7px; background: var(--up-surface); color: var(--up-text-3);
+  font-size: 11px; cursor: pointer; text-align: left;
+}
+.up-cp-contrast:hover { background: var(--up-surface-active); }
+.up-cp-contrast-sample { width: 34px; height: 22px; display: flex; align-items: center; justify-content: center; border-radius: 5px; font-size: 12px; font-weight: 700; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1); }
+.up-cp-contrast-ratio { color: var(--up-text-1); font-family: ui-monospace, 'SF Mono', Menlo, monospace; }
+.up-cp-contrast-grade { padding: 1px 5px; border-radius: 4px; background: rgba(74, 222, 128, 0.14); color: #4ade80; font-size: 10px; font-weight: 700; }
+.up-cp-contrast-fail { background: rgba(248, 113, 113, 0.14); color: #f87171; }
+.up-cp-contrast-bg { margin-left: auto; color: var(--up-text-4); font-size: 10.5px; }
+
+.up-cp-gbar-wrap { padding: 0 7px; }
+.up-cp-gbar { position: relative; height: 26px; border-radius: 7px; background: var(--up-checker); cursor: copy; touch-action: none; }
+.up-cp-gbar > b { position: absolute; inset: 0; border-radius: 7px; pointer-events: none; }
+.up-cp-stop {
+  position: absolute; top: 50%; width: 14px; height: 30px; transform: translate(-50%, -50%);
+  border: 2px solid #fff; border-radius: 5px; cursor: grab;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.5), 0 2px 6px rgba(0, 0, 0, 0.5);
+}
+.up-cp-stop-on { outline: 2px solid var(--up-accent); outline-offset: 2px; }
+.up-cp-stop-removing { opacity: 0.3; }
+
+.up-cp-seg { display: flex; padding: 2px; border-radius: 7px; background: var(--up-surface); }
+.up-cp-seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--up-text-4); font-size: 11px; font-weight: 500; cursor: pointer; }
+.up-cp-seg button:hover { color: var(--up-text-2); }
+.up-cp-seg .up-cp-seg-on { background: var(--up-surface-active); color: var(--up-text-1); }
+
+.up-cp-sect { border-top: 1px solid var(--up-border); padding-top: 8px; }
+.up-cp-sect-head {
+  width: 100%; display: flex; align-items: center; gap: 6px; padding: 2px 0 6px;
+  border: 0; background: none; color: var(--up-text-3); font-size: 11.5px; font-weight: 600; cursor: pointer; text-align: left;
+}
+.up-cp-sect-head:hover { color: var(--up-text-1); }
+.up-cp-sect-jp, .up-cp-sect-n { color: var(--up-text-4); font-weight: 400; }
+.up-cp-sect-n { font-weight: 500; }
+.up-cp-sect-head svg { width: 12px; height: 12px; margin-left: auto; fill: none; stroke: var(--up-text-4); stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; transition: transform 0.2s; }
+.up-cp-sect-open svg { transform: rotate(90deg); }
+/* The body scrolls, which clips overflow; padding with a matching negative margin leaves room for hover scale. */
+.up-cp-sect-body { max-height: 272px; margin: -6px; padding: 6px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+.up-cp-sect-free { max-height: none; overflow: visible; }
+.up-cp-sect-body[hidden] { display: none; }
+.up-cp-search {
+  width: 100%; height: 26px; margin-bottom: 6px; padding: 0 8px; border: 0; border-radius: 7px; outline: 0;
+  background: var(--up-surface); color: var(--up-text-1); font: 12px system-ui, sans-serif;
+}
+
+.up-cp-chips { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+.up-cp-chips-wide { grid-template-columns: repeat(4, 1fr); }
+.up-cp-chip {
+  position: relative; aspect-ratio: 1; padding: 0; border: 0; border-radius: 7px; cursor: pointer;
+  background: var(--up-checker); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08); transition: transform 0.12s;
+}
+.up-cp-chips-wide .up-cp-chip { aspect-ratio: 1.6; }
+.up-cp-chip > b { position: absolute; inset: 0; border-radius: inherit; }
+.up-cp-chip:hover { transform: scale(1.08); z-index: 1; }
+.up-cp-chip-add { display: flex; align-items: center; justify-content: center; background: none; border: 1px dashed #3a3a3a; box-shadow: none; color: var(--up-text-4); }
+.up-cp-chip-add:hover { color: var(--up-text-1); border-color: var(--up-text-3); }
+.up-cp-chip-add svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; }
+.up-cp-chip-x {
+  position: absolute; top: -5px; right: -5px; z-index: 2; width: 15px; height: 15px; padding: 0;
+  display: none; align-items: center; justify-content: center;
+  border: 1px solid #444; border-radius: 50%; background: #2a2a2a; color: #fff; font-size: 10px; line-height: 1; cursor: pointer;
+}
+.up-cp-chip:hover .up-cp-chip-x { display: flex; }
+.up-cp-chip-x:hover { background: #c33; border-color: #c33; }
+.up-cp-chip-label {
+  position: absolute; left: 4px; bottom: 2px; max-width: calc(100% - 6px); overflow: hidden; white-space: nowrap;
+  font-size: 9px; font-weight: 600; color: rgba(255, 255, 255, 0.92); text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6); pointer-events: none;
+}
+
+.up-cp-combos { display: flex; flex-direction: column; gap: 5px; }
+.up-cp-combo { display: flex; align-items: center; gap: 6px; }
+.up-cp-combo-no { width: 22px; text-align: right; font: 10px ui-monospace, 'SF Mono', Menlo, monospace; color: var(--up-text-4); }
+.up-cp-combo-strip { flex: 1; display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
+.up-cp-combo-strip i { flex: 1; cursor: pointer; transition: flex 0.15s; }
+.up-cp-combo-strip i:hover { flex: 1.6; }
+.up-cp-combo button { height: 22px; padding: 0 6px; border: 0; border-radius: 6px; background: var(--up-surface); color: var(--up-text-4); font-size: 11px; cursor: pointer; }
+.up-cp-combo button:hover { color: var(--up-text-1); }
+
+@media (prefers-reduced-motion: reduce) {
+  .up-cp-pop { animation: none; }
+}
+`;
+//#endregion
+//#region src/vendor/dialkit/styles.ts
+const DIALKIT_STYLES = `
+.up-root,
+.up-portal {
+  --dial-surface: var(--up-surface);
+  --dial-surface-hover: var(--up-surface-hover);
+  --dial-surface-active: var(--up-surface-active);
+  --dial-surface-subtle: #111;
+  --dial-text-root: var(--up-text-1);
+  --dial-text-section: var(--up-text-3);
+  --dial-text-label: var(--up-text-3);
+  --dial-text-focus: var(--up-text-1);
+  --dial-text-primary: var(--up-text-1);
+  --dial-text-secondary: var(--up-text-2);
+  --dial-text-tertiary: var(--up-text-4);
+  --dial-border: var(--up-border);
+  --dial-border-hover: var(--up-border-hover);
+  --dial-focus-ring: rgba(255, 255, 255, 0.6);
+  --dial-glass-bg: #1a1a1a;
+  --dial-dropdown-bg: #1a1a1a;
+  --dial-radius: var(--up-radius);
+  --dial-row-height: var(--up-row-h);
+  --dial-row-gap: 6px;
+  --dial-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  --dial-shadow-dropdown: 0 8px 24px rgba(0, 0, 0, 0.5);
+}
+
+/* Segmented Control */
+.dialkit-segmented {
+  position: relative;
+  display: flex;
+  padding: 2px;
+  background: transparent;
+  border-radius: var(--dial-radius);
+}
+
+.dialkit-segmented-pill {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  background: var(--dial-surface-active);
+  border-radius: 6px;
+  z-index: 0;
+  pointer-events: none;
+}
+
+.dialkit-segmented-button {
+  position: relative;
+  z-index: 1;
+  flex: 0 0 auto;
+  padding: 6px 8px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.dialkit-segmented-button[data-active="true"] {
+  color: var(--dial-text-primary);
+}
+
+.dialkit-segmented-button[data-active="false"] {
+  color: var(--dial-text-label);
+}
+
+/* Button Group */
+.dialkit-button-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dialkit-button {
+  flex: 1;
+  padding: 10px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dial-text-secondary);
+  background: var(--dial-surface);
+  border: none;
+  border-radius: var(--dial-radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.dialkit-button:hover {
+  background: var(--dial-surface-hover);
+  color: var(--dial-text-primary);
+}
+
+.dialkit-button:active {
+  background: var(--dial-surface-active);
+}
+
+/* Labeled Control Row (label + control side by side) */
+.dialkit-labeled-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: var(--dial-row-height);
+  padding: 2px 10px 2px 12px;
+  background: var(--dial-surface);
+  border-radius: var(--dial-radius);
+}
+
+.dialkit-labeled-control-label {
+  display: flex;
+  align-items: center;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dial-text-label);
+  flex-shrink: 0;
+  line-height: 17px;
+}
+
+.dialkit-labeled-control .dialkit-segmented {
+  flex-shrink: 0;
+  margin-right: -6px;
+}
+
+.dialkit-action-button {
+  width: 160px;
+  flex-shrink: 0;
+  padding: 10px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dial-text-secondary);
+  background: var(--dial-surface);
+  border: none;
+  border-radius: var(--dial-radius);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+
+.dialkit-action-button:hover {
+  background: var(--dial-surface-hover);
+  color: var(--dial-text-primary);
+}
+
+.dialkit-action-button:active {
+  background: var(--dial-surface-active);
+}
+
+.dialkit-actions-group {
+  align-items: flex-start;
+}
+
+.dialkit-actions-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 160px;
+}
+
+
+/* Spring Visualization */
+.dialkit-spring-viz {
+  width: 100%;
+  border-radius: var(--dial-radius);
+  background: var(--dial-surface);
+  overflow: visible;
+}
+
+.dialkit-easing-viz {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 256 / 180;
+  border-radius: var(--dial-radius);
+  background: var(--dial-surface);
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.dialkit-easing-viz svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.dialkit-easing-reference {
+  stroke: var(--dial-text-tertiary);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  opacity: 0.4;
+}
+
+.dialkit-easing-tangent {
+  stroke: var(--dial-text-tertiary);
+  stroke-width: 1;
+}
+
+.dialkit-easing-curve {
+  fill: none;
+  stroke: var(--dial-text-primary);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
+
+.dialkit-easing-endpoint {
+  fill: var(--dial-text-secondary);
+}
+
+.dialkit-easing-handle {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  transform: translate(-50%, -50%);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.dialkit-easing-handle::after {
+  content: '';
+  width: 10px;
+  height: 10px;
+  box-sizing: border-box;
+  border: 1.5px solid var(--dial-text-secondary);
+  border-radius: 50%;
+  background: var(--dial-surface);
+}
+
+.dialkit-easing-handle:hover::after,
+.dialkit-easing-handle:focus-visible::after,
+.dialkit-easing-handle[data-dragging]::after {
+  border-color: var(--dial-text-primary);
+  background: var(--dial-text-primary);
+}
+
+.dialkit-easing-handle[data-dragging] {
+  cursor: grabbing;
+  z-index: 1;
+}
+
+.dialkit-easing-handle:disabled {
+  pointer-events: none;
+}
+
+.dialkit-easing-instructions {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* Panel Wrapper (contains panel + toolbar) */
+/* Image selector: shared by React, Solid, Vue, and Svelte. */
+.dialkit-image-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: var(--dial-row-height);
+  padding: 0 6px 0 12px;
+  border: 0;
+  border-radius: var(--dial-radius);
+  background: var(--dial-surface);
+  color: var(--dial-text-label);
+  font: 500 13px system-ui, -apple-system, sans-serif;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s, box-shadow 0.15s;
+}
+.dialkit-image-control:hover { background: var(--dial-surface-hover); }
+.dialkit-image-control[data-open="true"] { background: var(--dial-surface-active); box-shadow: inset 0 0 0 1px var(--dial-border-hover); color: var(--dial-text-primary); }
+.dialkit-image-label { flex-shrink: 0; }
+.dialkit-image-value { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; color: var(--dial-text-secondary); font-size: 12px; }
+.dialkit-image-frame { position: relative; display: block; overflow: hidden; border-radius: var(--dial-radius); background: repeating-conic-gradient(var(--dial-surface) 0% 25%, transparent 0% 50%) 0 / 12px 12px, var(--dial-surface); }
+.dialkit-image-img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.dialkit-image-fallback { position: absolute; inset: 0; display: grid; place-items: center; color: var(--dial-text-tertiary); }
+.dialkit-image-fallback svg { width: 24px; height: 24px; }
+.dialkit-image-thumbnail { flex: 0 0 38px; height: 26px; border-radius: 5px; box-shadow: inset 0 0 0 1px var(--dial-border); }
+.dialkit-image-thumbnail svg { width: 16px; height: 16px; }
+.dialkit-image-popover {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  position: fixed;
+  margin: 0;
+  inset: auto;
+  z-index: 10002;
+  box-sizing: border-box;
+  padding: 12px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--dial-border-hover) transparent;
+  border: 1px solid var(--dial-border);
+  border-radius: 14px;
+  background: var(--dial-glass-bg);
+  box-shadow: var(--dial-shadow);
+  color: var(--dial-text-label);
+  font: 500 13px system-ui, -apple-system, sans-serif;
+  animation: dialkit-color-enter 0.16s ease-out;
+}
+.dialkit-image-popover *, .dialkit-image-popover *::before, .dialkit-image-popover *::after { box-sizing: border-box; }
+.dialkit-image-popover > * { flex-shrink: 0; }
+.dialkit-image-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.dialkit-image-title { color: var(--dial-text-primary); }
+.dialkit-image-clear { margin: -4px -4px -4px 0; padding: 4px; border: 0; border-radius: 4px; background: none; color: var(--dial-text-tertiary); font: inherit; font-size: 11px; cursor: pointer; }
+.dialkit-image-clear:hover { color: var(--dial-text-primary); }
+.dialkit-image-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--dial-row-gap); }
+.dialkit-image-option { position: relative; display: block; width: 100%; padding: 3px; border: 1px solid transparent; border-radius: calc(var(--dial-radius) + 3px); background: transparent; cursor: pointer; transition: border-color 0.15s, background 0.15s; }
+.dialkit-image-option-preview { width: 100%; aspect-ratio: 4 / 3; border-radius: calc(var(--dial-radius) - 1px); }
+.dialkit-image-option:hover { background: var(--dial-surface-hover); border-color: var(--dial-border-hover); }
+.dialkit-image-option[aria-pressed="true"] { border-color: var(--dial-text-label); background: var(--dial-surface-active); }
+.dialkit-image-upload { display: flex; flex: none; align-items: center; justify-content: center; gap: 8px; width: 100%; }
+.dialkit-image-upload svg { width: 15px; height: 15px; }
+.dialkit-image-popover[data-dragging="true"] .dialkit-image-upload { background: var(--dial-surface-hover); color: var(--dial-text-primary); }
+.dialkit-image-upload[aria-disabled="true"] { opacity: 0.6; cursor: progress; }
+.dialkit-image-empty { padding: 28px 12px; border-radius: var(--dial-radius); background: var(--dial-surface); color: var(--dial-text-tertiary); font-weight: 400; text-align: center; }
+.dialkit-image-status { font-size: 11px; font-weight: 400; line-height: 1.5; overflow-wrap: anywhere; }
+.dialkit-image-popover [hidden], .dialkit-image-frame [hidden], .dialkit-image-file { display: none; }
+@media (prefers-reduced-motion: reduce) { .dialkit-image-popover { animation: none; } }
+
+/* DialPad: a continuous two-axis field, shared across frameworks. */
+.dialkit-pad { display: grid; gap: var(--dial-row-gap); min-width: 0; }
+.dialkit-pad-caption { display: flex; align-items: center; min-width: 0; height: var(--dial-row-height); padding: 0 12px; border-radius: var(--dial-radius); background: var(--dial-surface); }
+.dialkit-pad-label { flex: 1; min-width: 0; color: var(--dial-text-label); font-size: 13px; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dialkit-pad-surface { position: relative; width: 100%; aspect-ratio: 1; overflow: hidden; border-radius: var(--dial-radius); background: var(--dial-surface); cursor: crosshair; touch-action: none; user-select: none; -webkit-user-select: none; }
+.dialkit-pad-plane { position: absolute; inset: 12px; pointer-events: none; }
+.dialkit-pad-grid { position: absolute; inset: 0; pointer-events: none; }
+.dialkit-pad-grid-line { position: absolute; background: var(--dial-border); opacity: 0.65; }
+.dialkit-pad-grid-vertical { top: 0; bottom: 0; width: 1px; transform: translateX(-50%); }
+.dialkit-pad-grid-horizontal { left: 0; right: 0; height: 1px; transform: translateY(-50%); }
+.dialkit-pad-center { position: absolute; top: 50%; left: 50%; width: 3px; height: 3px; border-radius: 50%; background: var(--dial-text-tertiary); transform: translate(-50%, -50%); }
+.dialkit-pad-point { position: absolute; width: 12px; height: 12px; border-radius: 50%; background: var(--dial-text-primary); box-shadow: 0 0 0 0 transparent, 0 2px 4px #0003; transform: translate(-50%, -50%); transition: box-shadow 0.15s; pointer-events: auto; cursor: grab; }
+.dialkit-pad-surface[data-dragging="true"], .dialkit-pad-surface[data-dragging="true"] .dialkit-pad-point { cursor: grabbing; }
+.dialkit-pad-surface[data-dragging="true"] .dialkit-pad-point { box-shadow: 0 0 0 6px var(--dial-border-hover), 0 2px 6px #0003; }
+.dialkit-pad-fields { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--dial-row-gap); }
+.dialkit-pad-field { display: flex; align-items: center; gap: 4px; min-width: 0; height: var(--dial-row-height); padding: 0 12px 0 10px; border-radius: var(--dial-radius); background: var(--dial-surface); }
+.dialkit-pad-axis { min-width: 0; max-width: 35%; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; color: var(--dial-text-label); }
+.dialkit-pad-value { min-width: 0; width: 100%; border: 0; padding: 0 0 1px; background: transparent; color: var(--dial-text-label); text-align: right; font: 500 13px ui-monospace, 'SF Mono', Menlo, monospace; }
+.dialkit-pad-field:focus-within { background: var(--dial-surface-hover); }
+.dialkit-pad-value:focus-visible { box-shadow: inset 0 -1px var(--dial-focus-ring); }
+.dialkit-pad-value:focus { color: var(--dial-text-focus); }
+.dialkit-pad-instructions { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; border: 0; }
+@media (prefers-reduced-motion: reduce) { .dialkit-pad-point { transition: none; } }
+
+/* Color Control */
+.dialkit-color-control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: var(--dial-row-height);
+  padding: 0 12px;
+  background: var(--dial-surface);
+  border-radius: var(--dial-radius);
+  transition: background 0.15s, box-shadow 0.15s;
+}
+
+.dialkit-color-control[data-open="true"] {
+  background: var(--dial-surface-active);
+  box-shadow: inset 0 0 0 1px var(--dial-border-hover);
+}
+.dialkit-color-control[data-open="true"] .dialkit-color-label,
+.dialkit-color-control[data-open="true"] .dialkit-color-value { color: var(--dial-text-primary); }
+
+.dialkit-color-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--dial-text-label);
+  flex-shrink: 0;
+  transform: translateY(-0.5px);
+}
+
+.dialkit-color-inputs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Color picker: shared by React, Solid, Vue, and Svelte. */
+.dialkit-color-inputs { min-width: 0; flex: 1; justify-content: flex-end; }
+.dialkit-color-value {
+  min-width: 0;
+  width: 100%;
+  padding: 4px 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--dial-text-label);
+  font: 500 13px ui-monospace, 'SF Mono', Menlo, monospace;
+  text-align: right;
+  text-overflow: ellipsis;
+}
+.dialkit-color-value:focus { color: var(--dial-text-focus); }
+.dialkit-color-swatch {
+  flex: 0 0 20px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border-radius: 5px;
+  border: 1px solid var(--dial-border-hover);
+  background: linear-gradient(var(--dial-color), var(--dial-color)), repeating-conic-gradient(#aaa 0% 25%, #eee 0% 50%) 0 / 8px 8px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 8%);
+  cursor: pointer;
+  transition: transform 0.15s;
+}
+.dialkit-color-swatch:hover { transform: scale(1.08); }
+.dialkit-color-popover {
+  display: grid;
+  gap: var(--dial-row-gap);
+  position: fixed;
+  margin: 0;
+  inset: auto;
+  z-index: 10002;
+  box-sizing: border-box;
+  padding: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  border: 1px solid var(--dial-border);
+  border-radius: 14px;
+  background: var(--dial-glass-bg);
+  box-shadow: var(--dial-shadow);
+  color: var(--dial-text-label);
+  animation: dialkit-color-enter 0.16s ease-out;
+}
+.dialkit-color-popover *, .dialkit-color-popover *::before, .dialkit-color-popover *::after { box-sizing: border-box; }
+.dialkit-color-plane { position: relative; height: 160px; border-radius: var(--dial-radius); touch-action: none; cursor: crosshair; user-select: none; }
+.dialkit-color-canvas { display: block; width: 100%; height: 100%; border-radius: inherit; }
+.dialkit-color-plane::after { content: ''; position: absolute; inset: 0; border-radius: inherit; box-shadow: inset 0 0 0 1px rgb(0 0 0 / 10%); pointer-events: none; }
+.dialkit-color-marker { position: absolute; z-index: 1; width: 12px; height: 12px; margin: -6px; border: 2px solid #fff; border-radius: 50%; box-shadow: 0 2px 4px rgb(0 0 0 / 30%); pointer-events: none; }
+.dialkit-color-tracks { display: grid; gap: var(--dial-row-gap); }
+.dialkit-color-track-row { display: flex; align-items: center; gap: 12px; height: var(--dial-row-height); padding: 0 12px; border-radius: var(--dial-radius); background: var(--dial-surface); font-size: 13px; font-weight: 500; }
+.dialkit-color-track-row > span { flex: 0 0 52px; color: var(--dial-text-label); }
+.dialkit-color-track {
+  -webkit-appearance: none; appearance: none; flex: 1; min-width: 0; height: 100%; padding: 0; margin: 0; border: 0; background: transparent; cursor: pointer; touch-action: none;
+}
+.dialkit-color-hue {
+  --dial-color-thumb-bg: var(--dial-color-thumb);
+}
+.dialkit-color-opacity {
+  --dial-color-track-bg: linear-gradient(to right, transparent, var(--dial-color-opaque)), repeating-conic-gradient(#aaa 0% 25%, #eee 0% 50%) 0 / 8px 8px;
+  --dial-color-thumb-bg: linear-gradient(var(--dial-color-thumb), var(--dial-color-thumb)), repeating-conic-gradient(#aaa 0% 25%, #eee 0% 50%) 0 / 8px 8px;
+}
+.dialkit-color-track::-webkit-slider-runnable-track { height: 16px; border-radius: 4px; background: var(--dial-color-track-bg); }
+.dialkit-color-track::-moz-range-track { height: 16px; border: 0; border-radius: 4px; background: var(--dial-color-track-bg); }
+.dialkit-color-track::-webkit-slider-thumb { -webkit-appearance: none; box-sizing: border-box; width: 16px; height: 24px; margin-top: -4px; border-radius: 5px; background: var(--dial-color-thumb-bg); background-clip: padding-box; border: 2px solid white; box-shadow: 0 2px 4px rgb(0 0 0 / 30%); }
+.dialkit-color-track::-moz-range-thumb { box-sizing: border-box; width: 16px; height: 24px; border-radius: 5px; background: var(--dial-color-thumb-bg); background-clip: padding-box; border: 2px solid white; box-shadow: 0 2px 4px rgb(0 0 0 / 30%); }
+/* The same row, buttons, and pill as Enabled, with no label and equal segments. */
+.dialkit-color-format-row { padding: 2px; }
+.dialkit-color-format-row .dialkit-color-formats { flex: 1; min-width: 0; margin-right: 0; }
+.dialkit-color-formats .dialkit-segmented-pill { left: 2px; width: calc((100% - 4px) / 3); transition: transform 0.2s cubic-bezier(0.25, 1, 0.5, 1); }
+.dialkit-color-format { flex: 1 1 0; min-width: 0; white-space: nowrap; }
+.dialkit-color-format:hover { color: var(--dial-text-primary); }
+.dialkit-color-css-input { display: block; width: 100%; height: var(--dial-row-height); padding: 0 12px; border: 0; border-radius: var(--dial-radius); background: var(--dial-surface); outline: none; color: var(--dial-text-label); font: 500 13px ui-monospace, 'SF Mono', Menlo, monospace; }
+.dialkit-color-css-input:focus { color: var(--dial-text-focus); }
+.dialkit-color-popover input[aria-invalid="true"], .dialkit-color-value[aria-invalid="true"] { color: #ef7777; }
+@keyframes dialkit-color-enter { from { opacity: 0; transform: translateY(3px) scale(0.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  .dialkit-color-popover { animation: none; }
+  .dialkit-color-formats .dialkit-segmented-pill { transition: none; }
+}
+
+/* Shortcut Pill */
+.dialkit-shortcut-pill {
+  display: inline-block;
+  font-size: 10px;
+  font-weight: 600;
+  font-family: system-ui, -apple-system, sans-serif;
+  color: var(--dial-text-tertiary);
+  background: var(--dial-surface-subtle);
+  padding: 1px 5px;
+  border-radius: 4px;
+  margin-left: 6px;
+  letter-spacing: 0.02em;
+  line-height: 16px;
+  white-space: nowrap;
+  vertical-align: middle;
+  transition: color 0.15s, background 0.15s;
+}
+
+.dialkit-shortcut-pill-active {
+  color: var(--dial-text-primary);
+  background: var(--dial-border-hover);
 }
 `;
 //#endregion
@@ -1588,11 +3300,11 @@ function h(n, u, i) {
 }
 function y(n, u) {
 	var i = p(t++, 3);
-	!c.__s && C(i.__H, u) && (i.__ = n, i.u = u, r.__H.__h.push(i));
+	!c.__s && C$1(i.__H, u) && (i.__ = n, i.u = u, r.__H.__h.push(i));
 }
 function _(n, u) {
 	var i = p(t++, 4);
-	!c.__s && C(i.__H, u) && (i.__ = n, i.u = u, r.__h.push(i));
+	!c.__s && C$1(i.__H, u) && (i.__ = n, i.u = u, r.__h.push(i));
 }
 function A$1(n) {
 	return o$1 = 5, T$1(function() {
@@ -1601,7 +3313,7 @@ function A$1(n) {
 }
 function T$1(n, r) {
 	var u = p(t++, 7);
-	return C(u.__H, r) && (u.__ = n(), u.__H = r, u.__h = n), u.__;
+	return C$1(u.__H, r) && (u.__ = n(), u.__H = r, u.__h = n), u.__;
 }
 function q$1(n, t) {
 	return o$1 = 8, T$1(function() {
@@ -1672,13 +3384,20 @@ function B$1(n) {
 	var t = r;
 	n.__c = n.__(), r = t;
 }
-function C(n, t) {
+function C$1(n, t) {
 	return !n || n.length !== t.length || t.some(function(t, r) {
 		return t !== n[r];
 	});
 }
 function D(n, t) {
 	return "function" == typeof t ? t(n) : t;
+}
+/** Fit a preferred panel size into the current viewport (never persisted). */
+function fitToViewport(width, height) {
+	return {
+		width: Math.max(0, Math.min(width, window.innerWidth - 24)),
+		height: Math.max(0, Math.min(height, window.innerHeight - 24))
+	};
 }
 function calculatePosition(corner, width, height) {
 	const ww = window.innerWidth;
@@ -1723,28 +3442,93 @@ function getBestCorner(mouseX, mouseY, initialMouseX, initialMouseY, threshold =
 	}
 	return mouseX > cx ? mouseY > cy ? "bottom-right" : "top-right" : mouseY > cy ? "bottom-left" : "top-left";
 }
-function getCollapsedPosition(corner, orientation) {
+function getCollapsedEdge(corner, orientation) {
+	if (orientation === "horizontal") return corner.endsWith("left") ? "left" : "right";
+	return corner.startsWith("top") ? "top" : "bottom";
+}
+const ANCHORS = [
+	"start",
+	"center",
+	"end"
+];
+/** Pixel offset of an anchor along an edge `span` long. */
+function anchorOffset(anchor, span) {
+	if (anchor === "start") return 12;
+	if (anchor === "end") return span - 12 - 56;
+	return (span - 56) / 2;
+}
+function edgeRect(edge, anchor) {
 	const ww = window.innerWidth;
 	const wh = window.innerHeight;
-	const half = 36 / 2;
-	if (orientation === "horizontal") {
-		const y = corner.startsWith("top") ? 72 : wh - 12 - 36 - 60;
-		return corner.endsWith("left") ? {
-			x: -half,
-			y
-		} : {
-			x: ww - half,
-			y
-		};
-	}
-	const x = corner.endsWith("left") ? 72 : ww - 12 - 36 - 60;
-	return corner.startsWith("top") ? {
-		x,
-		y: -half
-	} : {
-		x,
-		y: wh - half
+	if (edge === "left" || edge === "right") return {
+		x: edge === "left" ? 0 : ww - 26,
+		y: anchorOffset(anchor, wh),
+		width: 26,
+		height: 56
 	};
+	return {
+		x: anchorOffset(anchor, ww),
+		y: edge === "top" ? 0 : wh - 26,
+		width: 56,
+		height: 26
+	};
+}
+/** Rect of the collapsed handle, flush against its edge at one of the magnet points. */
+function getCollapsedPosition(corner, orientation, anchor) {
+	const edge = getCollapsedEdge(corner, orientation);
+	const fallback = orientation === "horizontal" ? corner.startsWith("top") ? "start" : "end" : corner.endsWith("left") ? "start" : "end";
+	return edgeRect(edge, anchor ?? fallback);
+}
+/** All 12 magnet points: each corner from both of its edges, plus every edge's middle. */
+function allDocks() {
+	return [
+		"top",
+		"right",
+		"bottom",
+		"left"
+	].flatMap((edge) => ANCHORS.map((anchor) => dockAt(edge, anchor, null)));
+}
+function dockAt(edge, anchor, pointer) {
+	const vertical = edge === "left" || edge === "right";
+	const half = (lo, hi, pos, span) => anchor === "start" ? lo : anchor === "end" ? hi : (pos ?? 0) < span / 2 ? lo : hi;
+	return {
+		corner: vertical ? `${half("top", "bottom", pointer?.y, window.innerHeight)}-${edge}` : `${edge}-${half("left", "right", pointer?.x, window.innerWidth)}`,
+		orientation: vertical ? "horizontal" : "vertical",
+		anchor,
+		edge,
+		rect: edgeRect(edge, anchor)
+	};
+}
+/** Nearest magnet point on `edge` to a position along it. */
+function dockOnEdge(edge, x, y) {
+	const vertical = edge === "left" || edge === "right";
+	const along = vertical ? y : x;
+	const span = vertical ? window.innerHeight : window.innerWidth;
+	return dockAt(edge, ANCHORS.reduce((best, a) => Math.abs(anchorOffset(a, span) + 56 / 2 - along) < Math.abs(anchorOffset(best, span) + 56 / 2 - along) ? a : best), {
+		x,
+		y
+	});
+}
+/** Magnet point for a pointer anywhere on screen: nearest edge, then nearest point on it. */
+function collapsedFromPoint(x, y) {
+	const ww = window.innerWidth;
+	const wh = window.innerHeight;
+	const dists = {
+		left: x,
+		right: ww - x,
+		top: y,
+		bottom: wh - y
+	};
+	return dockOnEdge(Object.keys(dists).reduce((a, b) => dists[b] < dists[a] ? b : a), x, y);
+}
+function isInExpandZone(x, y) {
+	const ww = window.innerWidth;
+	const wh = window.innerHeight;
+	return Math.min(x, ww - x, y, wh - y) > 140;
+}
+/** Corner the panel opens in when expanded from a point on screen. */
+function cornerFromPoint(x, y) {
+	return `${y < window.innerHeight / 2 ? "top" : "bottom"}-${x < window.innerWidth / 2 ? "left" : "right"}`;
 }
 function calculateResizedSizeAndPosition(handle, initialWidth, initialHeight, initialX, initialY, deltaX, deltaY) {
 	const maxW = window.innerWidth - 24;
@@ -1809,13 +3593,226 @@ function u(e, t, n, o, i, u) {
 	return l$1.vnode && l$1.vnode(l), l;
 }
 //#endregion
+//#region src/ui/Folder.tsx
+function Folder({ title, defaultOpen = true, variant, toolbar, children }) {
+	const [isOpen, setIsOpen] = d(defaultOpen);
+	const contentRef = A$1(null);
+	const innerRef = A$1(null);
+	const [height, setHeight] = d(null);
+	const measure = q$1(() => {
+		if (innerRef.current) setHeight(innerRef.current.offsetHeight);
+	}, []);
+	y(() => {
+		measure();
+		const ro = new ResizeObserver(measure);
+		if (innerRef.current) ro.observe(innerRef.current);
+		return () => ro.disconnect();
+	}, [measure]);
+	const toggle = q$1(() => {
+		if (!isOpen) measure();
+		setIsOpen((prev) => !prev);
+	}, [isOpen, measure]);
+	return /* @__PURE__ */ u("div", {
+		class: variant ? `up-folder up-folder-${variant}` : "up-folder",
+		children: [/* @__PURE__ */ u("div", {
+			class: "up-folder-head",
+			children: [/* @__PURE__ */ u("div", {
+				class: "up-folder-header",
+				role: "button",
+				tabIndex: 0,
+				"aria-expanded": isOpen,
+				onClick: toggle,
+				onKeyDown: (e) => {
+					if (e.target !== e.currentTarget || e.key !== "Enter" && e.key !== " ") return;
+					e.preventDefault();
+					toggle();
+				},
+				children: [/* @__PURE__ */ u("span", {
+					class: "up-folder-title",
+					children: title
+				}), /* @__PURE__ */ u("svg", {
+					class: `up-folder-chevron ${isOpen ? "up-folder-chevron-open" : "up-folder-chevron-closed"}`,
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke: "currentColor",
+					"stroke-width": "2.5",
+					"stroke-linecap": "round",
+					"stroke-linejoin": "round",
+					children: /* @__PURE__ */ u("path", { d: "M6 9.5L12 15.5L18 9.5" })
+				})]
+			}), toolbar && isOpen && /* @__PURE__ */ u("div", {
+				class: "up-folder-toolbar",
+				children: toolbar
+			})]
+		}), /* @__PURE__ */ u("div", {
+			ref: contentRef,
+			class: "up-folder-content",
+			inert: !isOpen,
+			style: { height: isOpen ? height !== null ? `${height}px` : "auto" : "0px" },
+			children: /* @__PURE__ */ u("div", {
+				ref: innerRef,
+				class: "up-folder-inner",
+				children
+			})
+		})]
+	});
+}
+//#endregion
+//#region src/vendor/dialkit/numeric.ts
+/** Snap relative to the minimum and keep exact endpoints reachable. */
+function roundValue$1(value, step, min, max) {
+	const lower = min ?? -Infinity;
+	const upper = max ?? Infinity;
+	const clamped = Math.max(lower, Math.min(upper, value));
+	if (clamped === lower || clamped === upper || !Number.isFinite(step) || step <= 0) return clamped;
+	const origin = min ?? 0;
+	const snapped = origin + Math.round((clamped - origin) / step) * step;
+	return Math.max(lower, Math.min(upper, Number(snapped.toPrecision(14))));
+}
+//#endregion
+//#region src/vendor/dialkit/shadow.ts
+/** The focused element, descending through open shadow roots. */
+function activeElement() {
+	let el = document.activeElement;
+	while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
+	return el;
+}
+/** The node an event really started on, even when observed from `document`. */
+function eventTarget(event) {
+	return event.composedPath()[0] ?? event.target;
+}
+//#endregion
+//#region src/shortcuts.ts
+function getEffectiveStep(control, shortcut) {
+	const range = (control.max ?? 1) - (control.min ?? 0);
+	const mode = shortcut.mode ?? "normal";
+	return mode === "fine" ? range * .01 : mode === "coarse" ? range * .1 : control.step ?? 1;
+}
+function applySliderDelta(target, step, direction) {
+	const { panelId, path, control } = target;
+	const current = PaneStore.getValue(panelId, path);
+	const min = control.min ?? 0;
+	const max = control.max ?? 1;
+	const next = Math.max(min, Math.min(max, current + direction * step));
+	PaneStore.updateValue(panelId, path, roundValue$1(next, step, min, max));
+}
+/** Shortcuts pause while typing or while a control itself has focus. */
+function isInputFocused() {
+	const el = activeElement();
+	if (!el) return false;
+	if (el.tagName === "INPUT" || el.tagName === "TEXTAREA") return true;
+	if (el.isContentEditable) return true;
+	return !!el.closest("select, button, [role=\"slider\"], [role=\"radio\"], [role=\"listbox\"], [role=\"menu\"], [role=\"menuitem\"], [role=\"button\"]");
+}
+function getActiveModifier(e) {
+	if (e.altKey) return "alt";
+	if (e.shiftKey) return "shift";
+	if (e.metaKey) return "meta";
+}
+function findControl(controls, path) {
+	for (const c of controls) {
+		if (c.path === path) return c;
+		const found = c.children && findControl(c.children, path);
+		if (found) return found;
+	}
+	return null;
+}
+function* allTargets() {
+	for (const panel of PaneStore.getPanels()) for (const [path, shortcut] of Object.entries(panel.shortcuts)) {
+		const control = findControl(panel.controls, path);
+		if (control) yield {
+			panelId: panel.id,
+			path,
+			control,
+			shortcut
+		};
+	}
+}
+function resolveShortcutTarget(key, modifier) {
+	for (const t of allTargets()) if (t.shortcut.key?.toLowerCase() === key.toLowerCase() && t.shortcut.modifier === modifier) return t;
+	return null;
+}
+function resolveHeldTarget(keys, interaction) {
+	for (const key of keys) for (const t of allTargets()) {
+		if (t.shortcut.key?.toLowerCase() !== key) continue;
+		if ((t.shortcut.interaction ?? "scroll") !== interaction) continue;
+		if (t.control.type === "slider") return t;
+	}
+	return null;
+}
+function resolveScrollOnlyTargets() {
+	return [...allTargets()].filter((t) => t.shortcut.interaction === "scroll-only" && t.control.type === "slider");
+}
+const MODIFIER_GLYPH = {
+	alt: "⌥",
+	shift: "⇧",
+	meta: "⌘"
+};
+function formatSliderShortcut(sc) {
+	const action = sc.interaction === "drag" ? "Drag" : sc.interaction === "move" ? "Move" : "Scroll";
+	if (!sc.key) return action;
+	return `${sc.modifier ? MODIFIER_GLYPH[sc.modifier] : ""}${sc.key.toUpperCase()}+${action}`;
+}
+function formatToggleShortcut(sc) {
+	if (!sc.key) return "Press";
+	return `${sc.modifier ? MODIFIER_GLYPH[sc.modifier] : ""}${sc.key.toUpperCase()}`;
+}
+//#endregion
+//#region src/vendor/dialkit/control-keyboard.ts
+/** Keyboard steps are relative to the range minimum, including fractional ranges. */
+function sliderKeyValue(key, value, min, max, step, shift = false) {
+	if (key === "Home") return min;
+	if (key === "End") return max;
+	const direction = [
+		"ArrowRight",
+		"ArrowUp",
+		"PageUp"
+	].includes(key) ? 1 : [
+		"ArrowLeft",
+		"ArrowDown",
+		"PageDown"
+	].includes(key) ? -1 : 0;
+	if (!direction) return void 0;
+	if (!(step > 0) || max <= min) return min;
+	const amount = key.startsWith("Page") || shift ? 10 : 1;
+	const position = (value - min) / step;
+	const next = min + (direction > 0 ? Math.floor(position + 1e-9) + amount : Math.ceil(position - 1e-9) - amount) * step;
+	return Math.max(min, Math.min(max, Number(next.toPrecision(14))));
+}
+function handleSliderKey(event, value, min, max, step, change, edit) {
+	if (event.target !== event.currentTarget || event.altKey || event.metaKey || event.ctrlKey) return;
+	const next = sliderKeyValue(event.key, value, min, max, step, event.shiftKey);
+	if (next === void 0 && event.key !== "Enter") return;
+	event.preventDefault();
+	event.stopPropagation();
+	if (next === void 0) edit();
+	else change(next);
+}
+function optionKeyIndex(key, index, count, wrap = false) {
+	if (!count) return void 0;
+	if (key === "Home") return 0;
+	if (key === "End") return count - 1;
+	const delta = ["ArrowRight", "ArrowDown"].includes(key) ? 1 : ["ArrowLeft", "ArrowUp"].includes(key) ? -1 : 0;
+	if (!delta) return void 0;
+	return wrap ? (index + delta + count) % count : Math.max(0, Math.min(count - 1, index + delta));
+}
+/** Find the next control in the owner's document order, excluding floating content. */
+function adjacentTabStop(trigger, backwards = false) {
+	const stops = Array.from(trigger.getRootNode().querySelectorAll("a[href], button, input, select, textarea, [tabindex], [contenteditable=\"true\"]")).filter((el) => el === trigger || el.tabIndex >= 0 && !el.matches(":disabled") && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== "hidden" && !el.closest("[inert], [aria-hidden=\"true\"], .dialkit-select-dropdown, .dialkit-preset-dropdown, .dialkit-shortcuts-dropdown, .dialkit-color-popover"));
+	const index = stops.indexOf(trigger);
+	return index < 0 ? void 0 : stops[index + (backwards ? -1 : 1)];
+}
+//#endregion
 //#region src/ui/Controls.tsx
-function Toggle({ label, checked, onChange }) {
+function Toggle({ label, checked, onChange, shortcut, shortcutActive }) {
 	return /* @__PURE__ */ u("div", {
 		class: "up-labeled-row",
 		children: [/* @__PURE__ */ u("span", {
 			class: "up-labeled-row-label",
-			children: label
+			children: [label, shortcut && /* @__PURE__ */ u("span", {
+				class: `dialkit-shortcut-pill${shortcutActive ? " dialkit-shortcut-pill-active" : ""}`,
+				children: formatToggleShortcut(shortcut)
+			})]
 		}), /* @__PURE__ */ u(SegmentedControl, {
 			options: [{
 				value: "off",
@@ -1845,9 +3842,21 @@ function SegmentedControl({ options, value, onChange }) {
 			});
 		}
 	}, [value]);
+	const onKeyDown = (e) => {
+		if (e.altKey || e.metaKey || e.ctrlKey) return;
+		const index = options.findIndex((o) => o.value === value);
+		const next = optionKeyIndex(e.key, index, options.length, true);
+		if (next === void 0) return;
+		e.preventDefault();
+		const opt = options[next];
+		onChange(opt.value);
+		btnRefs.current.get(opt.value)?.focus({ preventScroll: true });
+	};
 	return /* @__PURE__ */ u("div", {
 		ref: containerRef,
 		class: "up-seg",
+		role: "radiogroup",
+		onKeyDown,
 		children: [pillStyle && /* @__PURE__ */ u("div", {
 			class: "up-seg-pill",
 			style: {
@@ -1859,6 +3868,9 @@ function SegmentedControl({ options, value, onChange }) {
 				if (el) btnRefs.current.set(opt.value, el);
 			},
 			class: `up-seg-btn ${value === opt.value ? "up-seg-btn-active" : ""}`,
+			role: "radio",
+			"aria-checked": value === opt.value,
+			tabIndex: value === opt.value ? 0 : -1,
 			onClick: () => onChange(opt.value),
 			children: opt.label
 		}, opt.value))]
@@ -1887,117 +3899,6 @@ function TextInput({ label, value, onChange, placeholder }) {
 		})]
 	});
 }
-const HEX_RE = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
-function ColorPicker({ label, value, onChange }) {
-	const nativeRef = A$1(null);
-	const [editing, setEditing] = d(false);
-	const [draft, setDraft] = d(value);
-	y(() => {
-		if (!editing) setDraft(value);
-	}, [value, editing]);
-	const submit = q$1(() => {
-		setEditing(false);
-		if (HEX_RE.test(draft)) onChange(draft);
-		else setDraft(value);
-	}, [
-		draft,
-		onChange,
-		value
-	]);
-	const expandHex = (hex) => hex.length === 4 ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}` : hex;
-	return /* @__PURE__ */ u("div", {
-		class: "up-color-row",
-		children: [/* @__PURE__ */ u("span", {
-			class: "up-color-label",
-			children: label
-		}), /* @__PURE__ */ u("div", {
-			class: "up-color-inputs",
-			children: [
-				editing ? /* @__PURE__ */ u("input", {
-					type: "text",
-					class: "up-color-hex-input",
-					value: draft,
-					onInput: (e) => setDraft(e.target.value),
-					onBlur: submit,
-					onKeyDown: (e) => {
-						if (e.key === "Enter") submit();
-						if (e.key === "Escape") {
-							setEditing(false);
-							setDraft(value);
-						}
-					},
-					autoFocus: true
-				}) : /* @__PURE__ */ u("span", {
-					class: "up-color-hex",
-					onClick: () => setEditing(true),
-					children: (value ?? "").toUpperCase()
-				}),
-				/* @__PURE__ */ u("button", {
-					class: "up-color-swatch",
-					style: { backgroundColor: value },
-					onClick: () => nativeRef.current?.click(),
-					title: "Pick color"
-				}),
-				/* @__PURE__ */ u("input", {
-					ref: nativeRef,
-					type: "color",
-					class: "up-color-native",
-					value: expandHex(value).slice(0, 7),
-					onInput: (e) => onChange(e.target.value)
-				})
-			]
-		})]
-	});
-}
-//#endregion
-//#region src/ui/Folder.tsx
-function Folder({ title, defaultOpen = true, children }) {
-	const [isOpen, setIsOpen] = d(defaultOpen);
-	const contentRef = A$1(null);
-	const innerRef = A$1(null);
-	const [height, setHeight] = d(null);
-	const measure = q$1(() => {
-		if (innerRef.current) setHeight(innerRef.current.offsetHeight);
-	}, []);
-	y(() => {
-		measure();
-		const ro = new ResizeObserver(measure);
-		if (innerRef.current) ro.observe(innerRef.current);
-		return () => ro.disconnect();
-	}, [measure]);
-	return /* @__PURE__ */ u("div", {
-		class: "up-folder",
-		children: [/* @__PURE__ */ u("div", {
-			class: "up-folder-header",
-			onClick: q$1(() => {
-				if (!isOpen) measure();
-				setIsOpen((prev) => !prev);
-			}, [isOpen, measure]),
-			children: [/* @__PURE__ */ u("span", {
-				class: "up-folder-title",
-				children: title
-			}), /* @__PURE__ */ u("svg", {
-				class: `up-folder-chevron ${isOpen ? "up-folder-chevron-open" : "up-folder-chevron-closed"}`,
-				viewBox: "0 0 24 24",
-				fill: "none",
-				stroke: "currentColor",
-				"stroke-width": "2.5",
-				"stroke-linecap": "round",
-				"stroke-linejoin": "round",
-				children: /* @__PURE__ */ u("path", { d: "M6 9.5L12 15.5L18 9.5" })
-			})]
-		}), /* @__PURE__ */ u("div", {
-			ref: contentRef,
-			class: "up-folder-content",
-			style: { height: isOpen ? height !== null ? `${height}px` : "auto" : "0px" },
-			children: /* @__PURE__ */ u("div", {
-				ref: innerRef,
-				class: "up-folder-inner",
-				children
-			})
-		})]
-	});
-}
 //#endregion
 //#region node_modules/.pnpm/preact@10.29.0/node_modules/preact/compat/dist/compat.mjs
 function g(n, t) {
@@ -2008,6 +3909,31 @@ function E(n, t) {
 	for (var e in n) if ("__source" !== e && !(e in t)) return !0;
 	for (var r in t) if ("__source" !== r && n[r] !== t[r]) return !0;
 	return !1;
+}
+function C(n, t) {
+	var e = t(), r = d({ t: {
+		__: e,
+		u: t
+	} }), u = r[0].t, o = r[1];
+	return _(function() {
+		u.__ = e, u.u = t, R(u) && o({ t: u });
+	}, [
+		n,
+		e,
+		t
+	]), y(function() {
+		return R(u) && o({ t: u }), n(function() {
+			R(u) && o({ t: u });
+		});
+	}, [n]), e;
+}
+function R(n) {
+	try {
+		return !((t = n.__) === (e = n.u()) && (0 !== t || 1 / t == 1 / e) || t != t && e != e);
+	} catch (n) {
+		return !0;
+	}
+	var t, e;
 }
 function M(n, t) {
 	this.props = n, this.context = t;
@@ -2219,20 +4145,43 @@ l$1.diffed = function(n) {
 };
 //#endregion
 //#region src/ui/Select.tsx
+const WHEEL_THROTTLE_MS = 90;
+let nextId$2 = 0;
+/**
+* A select built for comparing options, not just picking one:
+* - open: hovering or arrowing through options previews them live; click or
+*   Enter commits, Esc / leaving the menu / clicking outside reverts;
+* - closed: ‹ › buttons, ←/→ while focused or hovered, and horizontal wheel
+*   step through options and commit immediately.
+*/
 function Select({ label, value, options, onChange, portalContainer }) {
 	const [isOpen, setIsOpen] = d(false);
-	const triggerRef = A$1(null);
-	const dropdownRef = A$1(null);
-	const [hoveredValue, setHoveredValue] = d(null);
+	const [highlight, setHighlight] = d(-1);
 	const [pos, setPos] = d(null);
+	const triggerRef = A$1(null);
+	const hovered = A$1(false);
+	const lastWheel = A$1(0);
+	const committed = A$1(value);
+	const idRef = A$1(`up-select-${++nextId$2}`);
 	const normalized = normalizeSelectOptions(options);
-	const selected = normalized.find((o) => o.value === value);
+	const index = normalized.findIndex((o) => o.value === value);
+	const selected = normalized[index];
+	if (!isOpen) committed.current = value;
+	const step = q$1((dir) => {
+		if (!normalized.length) return;
+		const next = normalized[((index < 0 ? 0 : index) + dir + normalized.length) % normalized.length];
+		onChange(next.value);
+	}, [
+		normalized,
+		index,
+		onChange
+	]);
 	const updatePos = q$1(() => {
 		const el = triggerRef.current;
 		if (!el) return;
 		const rect = el.getBoundingClientRect();
-		const ddHeight = 8 + normalized.length * 36;
-		const above = window.innerHeight - rect.bottom - 4 < ddHeight && rect.top > ddHeight;
+		const menuHeight = 8 + normalized.length * 34;
+		const above = window.innerHeight - rect.bottom - 4 < menuHeight && rect.top > menuHeight;
 		setPos({
 			top: above ? rect.top - 4 : rect.bottom + 4,
 			left: rect.left,
@@ -2240,104 +4189,191 @@ function Select({ label, value, options, onChange, portalContainer }) {
 			above
 		});
 	}, [normalized.length]);
+	const open = q$1(() => {
+		committed.current = value;
+		setHighlight(index);
+		setIsOpen(true);
+	}, [value, index]);
+	const close = q$1((commit) => {
+		setIsOpen(false);
+		const target = commit ?? committed.current;
+		if (target !== value) onChange(target);
+		committed.current = target;
+	}, [value, onChange]);
+	const preview = q$1((i) => {
+		setHighlight(i);
+		const opt = normalized[i];
+		if (opt && opt.value !== value) onChange(opt.value);
+	}, [
+		normalized,
+		value,
+		onChange
+	]);
 	y(() => {
 		if (!isOpen) {
 			setPos(null);
 			return;
 		}
 		updatePos();
+		const scroller = triggerRef.current?.closest(".up-content");
+		scroller?.addEventListener("scroll", updatePos, { passive: true });
+		window.addEventListener("resize", updatePos);
+		return () => {
+			scroller?.removeEventListener("scroll", updatePos);
+			window.removeEventListener("resize", updatePos);
+		};
 	}, [isOpen, updatePos]);
-	const portalTarget = typeof document !== "undefined" ? document.body : portalContainer;
-	return /* @__PURE__ */ u("div", { children: [/* @__PURE__ */ u("button", {
-		type: "button",
+	y(() => {
+		const onKey = (e) => {
+			if (!hovered.current || isOpen || e.altKey || e.metaKey || e.ctrlKey) return;
+			if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+			const tag = e.composedPath()[0]?.tagName;
+			if (tag === "INPUT" || tag === "TEXTAREA") return;
+			e.preventDefault();
+			step(e.key === "ArrowRight" ? 1 : -1);
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	}, [isOpen, step]);
+	const onTriggerKeyDown = (e) => {
+		if (e.altKey || e.metaKey || e.ctrlKey) return;
+		if (!isOpen) {
+			if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+				e.preventDefault();
+				e.stopPropagation();
+				step(e.key === "ArrowRight" ? 1 : -1);
+			} else if ([
+				"ArrowDown",
+				"ArrowUp",
+				"Enter",
+				" "
+			].includes(e.key)) {
+				e.preventDefault();
+				open();
+			}
+			return;
+		}
+		const count = normalized.length;
+		if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+			e.preventDefault();
+			preview(((highlight < 0 ? index : highlight) + (e.key === "ArrowDown" ? 1 : -1) + count) % count);
+		} else if (e.key === "Home" || e.key === "End") {
+			e.preventDefault();
+			preview(e.key === "Home" ? 0 : count - 1);
+		} else if (e.key === "Enter" || e.key === " ") {
+			e.preventDefault();
+			close(normalized[highlight]?.value ?? null);
+		} else if (e.key === "Escape" || e.key === "Tab") {
+			if (e.key === "Escape") e.preventDefault();
+			close(null);
+		}
+	};
+	const onWheel = (e) => {
+		if (isOpen || Math.abs(e.deltaX) <= Math.abs(e.deltaY) || Math.abs(e.deltaX) < 2) return;
+		e.preventDefault();
+		const now = performance.now();
+		if (now - lastWheel.current < WHEEL_THROTTLE_MS) return;
+		lastWheel.current = now;
+		step(e.deltaX > 0 ? 1 : -1);
+	};
+	const showPosition = normalized.length > 1 && index >= 0;
+	const menuId = `${idRef.current}-menu`;
+	return /* @__PURE__ */ u("div", { children: [/* @__PURE__ */ u("div", {
 		ref: triggerRef,
+		role: "combobox",
+		tabIndex: 0,
+		"aria-label": label,
+		"aria-haspopup": "listbox",
+		"aria-expanded": isOpen,
+		"aria-controls": menuId,
+		"aria-activedescendant": isOpen && highlight >= 0 ? `${idRef.current}-${highlight}` : void 0,
 		class: `up-select-trigger ${isOpen ? "up-select-trigger-open" : ""}`,
+		onMouseEnter: () => hovered.current = true,
+		onMouseLeave: () => hovered.current = false,
 		onMouseDown: (e) => {
-			e.preventDefault();
-			e.stopPropagation();
-			setIsOpen((v) => !v);
+			if (e.target.closest(".up-select-step")) return;
+			if (isOpen) close(null);
+			else open();
 		},
-		onClick: (e) => {
-			if (e.detail !== 0) return;
-			e.preventDefault();
-			e.stopPropagation();
-			setIsOpen((v) => !v);
-		},
-		children: [/* @__PURE__ */ u("span", { children: label }), /* @__PURE__ */ u("div", {
+		onKeyDown: onTriggerKeyDown,
+		onWheel,
+		children: [/* @__PURE__ */ u("span", {
+			class: "up-select-label",
+			children: label
+		}), /* @__PURE__ */ u("div", {
 			class: "up-select-right",
 			children: [/* @__PURE__ */ u("span", {
-				class: "up-select-value",
-				children: selected?.label ?? value
-			}), /* @__PURE__ */ u("svg", {
-				class: `up-select-chevron ${isOpen ? "up-select-chevron-open" : ""}`,
-				viewBox: "0 0 24 24",
-				fill: "none",
-				stroke: "currentColor",
-				"stroke-width": "2.5",
-				"stroke-linecap": "round",
-				"stroke-linejoin": "round",
-				children: /* @__PURE__ */ u("path", { d: "M6 9.5L12 15.5L18 9.5" })
+				class: "up-select-current",
+				children: [/* @__PURE__ */ u("span", {
+					class: "up-select-value",
+					children: selected?.label ?? value
+				}), showPosition && /* @__PURE__ */ u("span", {
+					class: "up-select-pos",
+					"aria-hidden": "true",
+					children: ["· ", index + 1]
+				})]
+			}), /* @__PURE__ */ u("span", {
+				class: "up-select-steps",
+				children: [/* @__PURE__ */ u("button", {
+					type: "button",
+					class: "up-select-step",
+					tabIndex: -1,
+					"aria-label": `Previous ${label}`,
+					onMouseDown: (e) => e.preventDefault(),
+					onClick: () => step(-1),
+					children: /* @__PURE__ */ u("svg", {
+						viewBox: "0 0 24 24",
+						children: /* @__PURE__ */ u("path", { d: "M14.5 6L8.5 12L14.5 18" })
+					})
+				}), /* @__PURE__ */ u("button", {
+					type: "button",
+					class: "up-select-step",
+					tabIndex: -1,
+					"aria-label": `Next ${label}`,
+					onMouseDown: (e) => e.preventDefault(),
+					onClick: () => step(1),
+					children: /* @__PURE__ */ u("svg", {
+						viewBox: "0 0 24 24",
+						children: /* @__PURE__ */ u("path", { d: "M9.5 6L15.5 12L9.5 18" })
+					})
+				})]
 			})]
 		})]
-	}), isOpen && pos && portalTarget && $(/* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u("div", {
-		style: {
-			position: "fixed",
-			inset: 0,
-			zIndex: 2147483646
-		},
+	}), isOpen && pos && portalContainer && $(/* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u("div", {
+		class: "up-overlay-backdrop",
 		onMouseDown: (e) => {
 			e.preventDefault();
-			e.stopPropagation();
-			setIsOpen(false);
+			close(null);
 		}
 	}), /* @__PURE__ */ u("div", {
-		ref: dropdownRef,
+		id: menuId,
+		role: "listbox",
+		"aria-label": label,
 		class: "up-select-dropdown",
-		onMouseDown: (e) => e.stopPropagation(),
+		onMouseDown: (e) => e.preventDefault(),
+		onMouseLeave: () => {
+			setHighlight(normalized.findIndex((o) => o.value === committed.current));
+			if (value !== committed.current) onChange(committed.current);
+		},
 		style: {
-			position: "fixed",
-			zIndex: 2147483647,
-			display: "flex",
-			flexDirection: "column",
-			gap: "0",
-			padding: "4px",
 			left: `${pos.left}px`,
 			width: `${pos.width}px`,
-			background: "#1a1a1a",
-			border: "1px solid #2a2a2a",
-			borderRadius: "8px",
-			boxShadow: "0 8px 24px rgba(0,0,0,0.5)",
-			fontFamily: "system-ui, -apple-system, 'SF Pro Display', sans-serif",
-			fontSize: "13px",
 			...pos.above ? { bottom: `${window.innerHeight - pos.top}px` } : { top: `${pos.top}px` }
 		},
-		children: normalized.map((opt) => /* @__PURE__ */ u("button", {
-			type: "button",
-			class: `up-select-option ${opt.value === value ? "up-select-option-selected" : ""}`,
-			onMouseEnter: () => setHoveredValue(opt.value),
-			onMouseLeave: () => setHoveredValue((current) => current === opt.value ? null : current),
-			onClick: () => {
-				onChange(opt.value);
-				setIsOpen(false);
-			},
-			style: {
-				display: "block",
-				width: "100%",
-				padding: "8px 10px",
-				fontFamily: "inherit",
-				fontSize: "13px",
-				fontWeight: "500",
-				color: opt.value === value ? "#ffffff" : "#a3a3a3",
-				background: opt.value === value ? "#1e1e1e" : hoveredValue === opt.value ? "#141414" : "transparent",
-				border: "none",
-				borderRadius: "6px",
-				cursor: "pointer",
-				textAlign: "left",
-				appearance: "none"
-			},
-			children: opt.label
+		children: normalized.map((opt, i) => /* @__PURE__ */ u("div", {
+			id: `${idRef.current}-${i}`,
+			role: "option",
+			"aria-selected": opt.value === committed.current,
+			class: [
+				"up-select-option",
+				opt.value === committed.current ? "up-select-option-selected" : "",
+				i === highlight ? "up-select-option-highlight" : ""
+			].join(" "),
+			onMouseEnter: () => preview(i),
+			onClick: () => close(opt.value),
+			children: [/* @__PURE__ */ u("span", { children: opt.label }), opt.value === committed.current && /* @__PURE__ */ u("span", { class: "up-select-check" })]
 		}, opt.value))
-	})] }), portalTarget)] });
+	})] }), portalContainer)] });
 }
 //#endregion
 //#region src/anim.ts
@@ -2374,6 +4410,41 @@ function animateSpring(from, to, config, onUpdate, onComplete) {
 		if (rafId !== null) cancelAnimationFrame(rafId);
 	} };
 }
+/** Motion's visualDuration/bounce → physical spring constants (mass 1). */
+function timeToPhysics(visualDuration, bounce) {
+	const stiffness = Math.pow(2 * Math.PI / visualDuration, 2);
+	return {
+		stiffness,
+		damping: 2 * (1 - bounce) * Math.sqrt(stiffness),
+		mass: 1
+	};
+}
+function physicsToTime({ stiffness, damping, mass }) {
+	const omega = Math.sqrt(stiffness / mass);
+	const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+	return {
+		visualDuration: 2 * Math.PI / omega,
+		bounce: Math.max(0, 1 - zeta)
+	};
+}
+/**
+* Analytic step response (0 → 1, starting at rest). Closed form instead of
+* numeric integration: a fixed-step integrator diverges for stiff, light
+* springs that are still inside the editor's slider ranges.
+*/
+function springProgress(t, { stiffness, damping, mass }) {
+	const w0 = Math.sqrt(stiffness / mass);
+	const zeta = damping / (2 * Math.sqrt(stiffness * mass));
+	if (zeta < 1) {
+		const wd = w0 * Math.sqrt(1 - zeta * zeta);
+		return 1 - Math.exp(-zeta * w0 * t) * (Math.cos(wd * t) + zeta * w0 / wd * Math.sin(wd * t));
+	}
+	if (zeta === 1) return 1 - Math.exp(-w0 * t) * (1 + w0 * t);
+	const s = Math.sqrt(zeta * zeta - 1);
+	const r1 = -w0 * (zeta - s);
+	const r2 = -w0 * (zeta + s);
+	return 1 - (r2 * Math.exp(r1 * t) - r1 * Math.exp(r2 * t)) / (r2 - r1);
+}
 //#endregion
 //#region src/ui/Slider.tsx
 const CLICK_THRESHOLD = 3;
@@ -2395,7 +4466,7 @@ function snapToDecile(rawValue, min, max) {
 	if (Math.abs(normalized - nearest) <= .03125) return min + nearest * (max - min);
 	return rawValue;
 }
-function Slider({ label, value, onChange, min, max, step }) {
+function Slider({ label, value, onChange, min, max, step, shortcut, shortcutActive }) {
 	const wrapRef = A$1(null);
 	const inputRef = A$1(null);
 	const [isHovered, setIsHovered] = d(false);
@@ -2412,7 +4483,7 @@ function Slider({ label, value, onChange, min, max, step }) {
 	const fillRef = A$1(null);
 	const handleRef = A$1(null);
 	const trackRef = A$1(null);
-	const percentage = (value - min) / (max - min) * 100;
+	const percentage = Math.max(0, Math.min(100, (value - min) / (max - min || 1) * 100));
 	y(() => {
 		if (!interacting.current && !animHandle.current) {
 			if (fillRef.current) fillRef.current.style.width = `${percentage}%`;
@@ -2441,7 +4512,7 @@ function Slider({ label, value, onChange, min, max, step }) {
 		return sign * MAX_STRETCH * Math.sqrt(Math.min(overflow / MAX_CURSOR_RANGE, 1));
 	}, []);
 	const handlePointerDown = q$1((e) => {
-		if (isEditing) return;
+		if (isEditing || e.target.closest(".up-slider-value-editable")) return;
 		e.preventDefault();
 		e.target.setPointerCapture(e.pointerId);
 		pointerStart.current = {
@@ -2550,9 +4621,10 @@ function Slider({ label, value, onChange, min, max, step }) {
 			inputRef.current.select();
 		}
 	}, [isEditing]);
+	const cancelled = A$1(false);
 	const submitEdit = q$1(() => {
 		const parsed = parseFloat(editValue);
-		if (!isNaN(parsed)) onChange(roundValue(Math.max(min, Math.min(max, parsed)), step));
+		if (!cancelled.current && !isNaN(parsed)) onChange(roundValue(Math.max(min, Math.min(max, parsed)), step));
 		setIsEditing(false);
 		setIsValueHovered(false);
 		setIsValueEditable(false);
@@ -2583,6 +4655,23 @@ function Slider({ label, value, onChange, min, max, step }) {
 				isActive ? "up-slider-active" : "",
 				isDragging ? "up-slider-dragging" : ""
 			].filter(Boolean).join(" "),
+			role: "slider",
+			tabIndex: isEditing ? -1 : 0,
+			"aria-label": label,
+			"aria-valuemin": min,
+			"aria-valuemax": max,
+			"aria-valuenow": value,
+			"aria-valuetext": displayValue,
+			onKeyDown: (e) => handleSliderKey(e, value, min, max, step, (next) => {
+				animHandle.current?.stop();
+				animHandle.current = null;
+				setFillPercent((next - min) / (max - min) * 100);
+				onChange(next);
+			}, () => {
+				cancelled.current = false;
+				setEditValue(displayValue);
+				setIsEditing(true);
+			}),
 			onPointerDown: handlePointerDown,
 			onPointerMove: handlePointerMove,
 			onPointerUp: handlePointerUp,
@@ -2608,7 +4697,10 @@ function Slider({ label, value, onChange, min, max, step }) {
 				}),
 				/* @__PURE__ */ u("span", {
 					class: "up-slider-label",
-					children: label
+					children: [label, shortcut && /* @__PURE__ */ u("span", {
+						class: `dialkit-shortcut-pill${shortcutActive ? " dialkit-shortcut-pill-active" : ""}`,
+						children: formatSliderShortcut(shortcut)
+					})]
 				}),
 				isEditing ? /* @__PURE__ */ u("input", {
 					ref: inputRef,
@@ -2619,8 +4711,10 @@ function Slider({ label, value, onChange, min, max, step }) {
 					onKeyDown: (e) => {
 						if (e.key === "Enter") submitEdit();
 						if (e.key === "Escape") {
+							cancelled.current = true;
 							setIsEditing(false);
 							setIsValueHovered(false);
+							setIsValueEditable(false);
 						}
 					},
 					onBlur: submitEdit,
@@ -2634,6 +4728,7 @@ function Slider({ label, value, onChange, min, max, step }) {
 						if (isValueEditable) {
 							e.stopPropagation();
 							e.preventDefault();
+							cancelled.current = false;
 							setIsEditing(true);
 							setEditValue(displayValue);
 						}
@@ -2678,41 +4773,1036 @@ function Slot({ panelId, path, label }) {
 	});
 }
 //#endregion
-//#region src/ui/Transition.tsx
-function generateSpringCurve(stiffness, damping, mass, duration) {
-	const points = [];
-	const steps = 100;
-	const dt = duration / steps;
-	let position = 0;
-	let velocity = 0;
-	for (let i = 0; i <= steps; i++) {
-		const time = i * dt;
-		points.push([time, position]);
-		const springForce = -stiffness * (position - 1);
-		const dampForce = -damping * velocity;
-		velocity += (springForce + dampForce) / mass * dt;
-		position += velocity * dt;
+//#region src/vendor/dialkit/easing-geometry.ts
+const clampY = (value) => Math.max(-1, Math.min(2, value));
+function formatEase(ease) {
+	return ease.join(", ");
+}
+function parseEase(text) {
+	const parts = text.split(",").map((part) => part.trim());
+	if (parts.length !== 4 || parts.some((part) => !/^[+-]?(?:\d+\.?\d*|\.\d+)(?:e[+-]?\d+)?$/i.test(part))) return null;
+	const values = parts.map(Number);
+	if (!values.every(Number.isFinite) || values[0] < 0 || values[0] > 1 || values[2] < 0 || values[2] > 1) return null;
+	values[1] = clampY(values[1]);
+	values[3] = clampY(values[3]);
+	return values;
+}
+/** Defensive rendering for externally supplied values; valid overshoot is never clamped. */
+function normalizeEase(ease) {
+	return ease.map((value, index) => {
+		const finite = Number.isFinite(value) ? value : index < 2 ? 0 : 1;
+		return index % 2 === 0 ? Math.max(0, Math.min(1, finite)) : finite;
+	});
+}
+/** Fit both axes equally so the 0→1 reference stays at 45°, including during overshoot. */
+function fitEasingGraph(ease, width, height) {
+	const value = normalizeEase(ease);
+	const padding = Math.min(12, width / 4, height / 4);
+	const radiusY = Math.max(.5, Math.abs(value[1] - .5), Math.abs(value[3] - .5));
+	const unit = Math.min(width - padding * 2, (height / 2 - padding) / radiusY);
+	const scale = {
+		x: unit,
+		y: unit
+	};
+	const project = (x, y) => ({
+		x: width / 2 + (x - .5) * scale.x,
+		y: height / 2 - (y - .5) * scale.y
+	});
+	return {
+		scale,
+		start: project(0, 0),
+		end: project(1, 1),
+		handles: [project(value[0], value[1]), project(value[2], value[3])]
+	};
+}
+/** Deltas use the pointer-down scale so refitting the display cannot amplify a drag. */
+function moveEasingHandle(ease, handle, dx, dy, scale) {
+	const next = [...ease];
+	if (!Number.isFinite(scale.x) || !Number.isFinite(scale.y) || scale.x <= 0 || scale.y <= 0) return next;
+	const index = handle * 2;
+	const x = ease[index] + dx / scale.x;
+	const y = ease[index + 1] - dy / scale.y;
+	if (dx !== 0) next[index] = Number(Math.max(0, Math.min(1, x)).toFixed(2));
+	if (dy !== 0 && Number.isFinite(y)) next[index + 1] = Number(clampY(y).toFixed(2));
+	return next;
+}
+function easingHandleFromKey(ease, handle, key, shift) {
+	const delta = shift ? .1 : .01;
+	const scale = {
+		x: 1,
+		y: 1
+	};
+	if (key === "ArrowLeft") return moveEasingHandle(ease, handle, -delta, 0, scale);
+	if (key === "ArrowRight") return moveEasingHandle(ease, handle, delta, 0, scale);
+	if (key === "ArrowUp") return moveEasingHandle(ease, handle, 0, -delta, scale);
+	if (key === "ArrowDown") return moveEasingHandle(ease, handle, 0, delta, scale);
+}
+/** Stop the tangent at the handle's outer radius, including when the handle meets an endpoint. */
+function easingGuideEnd(start, handle, radius = 5) {
+	const dx = handle.x - start.x;
+	const dy = handle.y - start.y;
+	const distance = Math.hypot(dx, dy);
+	if (distance <= radius) return { ...start };
+	return {
+		x: handle.x - dx / distance * radius,
+		y: handle.y - dy / distance * radius
+	};
+}
+//#endregion
+//#region src/vendor/dialkit/dial-pad-control.ts
+let nextId$1 = 0;
+function element$1(tag, className, text) {
+	const el = document.createElement(tag);
+	el.className = className;
+	if (text) el.textContent = text;
+	return el;
+}
+/** Shared pointer, keyboard, and numeric editing behavior for all four frameworks. */
+function mountDialPad(host, initial) {
+	let props = initial;
+	let value = normalizePadValue(props.value, props);
+	let drag;
+	const root = element$1("div", "dialkit-pad");
+	const fields = element$1("div", "dialkit-pad-fields");
+	const caption = element$1("div", "dialkit-pad-caption");
+	const label = element$1("span", "dialkit-pad-label");
+	caption.append(label);
+	fields.append(caption);
+	const surface = element$1("div", "dialkit-pad-surface");
+	surface.tabIndex = 0;
+	surface.setAttribute("role", "group");
+	const plane = element$1("div", "dialkit-pad-plane");
+	plane.setAttribute("aria-hidden", "true");
+	const grid = element$1("div", "dialkit-pad-grid");
+	grid.setAttribute("aria-hidden", "true");
+	for (let index = 1; index < 6; index++) {
+		const vertical = element$1("span", "dialkit-pad-grid-line dialkit-pad-grid-vertical");
+		const horizontal = element$1("span", "dialkit-pad-grid-line dialkit-pad-grid-horizontal");
+		vertical.style.left = `${index / 6 * 100}%`;
+		horizontal.style.top = `${index / 6 * 100}%`;
+		grid.append(vertical, horizontal);
 	}
-	return points;
+	const center = element$1("span", "dialkit-pad-center");
+	const point = element$1("span", "dialkit-pad-point");
+	plane.append(center, point);
+	surface.append(grid, plane);
+	const instructions = element$1("span", "dialkit-pad-instructions", "Arrow keys adjust each axis. Shift adjusts by ten steps. Home resets both axes. Hold Shift while dragging to lock an axis.");
+	instructions.id = `dialkit-pad-help-${++nextId$1}`;
+	surface.setAttribute("aria-describedby", instructions.id);
+	const inputs = ["x", "y"].map((axis) => {
+		const field = element$1("label", "dialkit-pad-field");
+		const name = element$1("span", "dialkit-pad-axis");
+		const input = element$1("input", "dialkit-pad-value");
+		input.type = "text";
+		input.inputMode = "decimal";
+		input.autocomplete = "off";
+		input.spellcheck = false;
+		input.setAttribute("role", "spinbutton");
+		field.append(name, input);
+		fields.append(field);
+		input.addEventListener("focus", () => input.select());
+		input.addEventListener("blur", () => {
+			const number = input.value.trim() === "" ? NaN : Number(input.value);
+			if (Number.isFinite(number)) commit({
+				...value,
+				[axis]: number
+			});
+			input.value = String(value[axis]);
+		});
+		input.addEventListener("keydown", (event) => {
+			event.stopPropagation();
+			if (event.key === "Enter" || event.key === "Escape") {
+				event.preventDefault();
+				if (event.key === "Escape") input.value = String(value[axis]);
+				input.blur();
+				surface.focus({ preventScroll: true });
+			} else if (!event.altKey && !event.metaKey && !event.ctrlKey && ["ArrowUp", "ArrowDown"].includes(event.key)) {
+				event.preventDefault();
+				const range = resolvePadAxis(props[axis]);
+				const draft = input.value.trim() === "" ? NaN : Number(input.value);
+				const current = Number.isFinite(draft) ? draft : value[axis];
+				const direction = event.key === "ArrowUp" ? 1 : -1;
+				commit({
+					...value,
+					[axis]: snapPadAxis(current + direction * range.step * (event.shiftKey ? 10 : 1), range)
+				});
+				input.value = String(value[axis]);
+			}
+		});
+		return {
+			axis,
+			name,
+			input
+		};
+	});
+	root.append(fields, surface, instructions);
+	host.append(root);
+	function render() {
+		label.textContent = props.label;
+		label.title = props.label;
+		const names = {
+			x: props.labels?.x ?? "X",
+			y: props.labels?.y ?? "Y"
+		};
+		surface.setAttribute("aria-label", `${props.label}: ${names.x} ${value.x}, ${names.y} ${value.y}`);
+		inputs.forEach(({ axis, name, input }) => {
+			const range = resolvePadAxis(props[axis]);
+			name.textContent = names[axis];
+			name.title = names[axis];
+			input.setAttribute("aria-label", `${props.label} ${names[axis]}`);
+			input.setAttribute("aria-valuemin", String(range.min));
+			input.setAttribute("aria-valuemax", String(range.max));
+			input.setAttribute("aria-valuenow", String(value[axis]));
+			if (activeElement() !== input) input.value = String(value[axis]);
+			const fraction = (value[axis] - range.min) / (range.max - range.min);
+			point.style[axis === "x" ? "left" : "top"] = `${(axis === "x" ? fraction : 1 - fraction) * 100}%`;
+		});
+	}
+	function commit(next) {
+		const normalized = normalizePadValue(next, props);
+		if (normalized.x === value.x && normalized.y === value.y) return;
+		value = normalized;
+		render();
+		props.onChange({ ...value });
+	}
+	function endDrag() {
+		const id = drag?.id;
+		drag = void 0;
+		delete surface.dataset.dragging;
+		if (id !== void 0 && surface.hasPointerCapture(id)) surface.releasePointerCapture(id);
+	}
+	function move(event, released = false) {
+		if (!drag || event.pointerId !== drag.id) return;
+		if (Math.max(Math.abs(event.clientX - drag.start.x), Math.abs(event.clientY - drag.start.y)) >= 3) {
+			drag.moved = true;
+			surface.dataset.dragging = "true";
+		}
+		const bounds = plane.getBoundingClientRect();
+		if (!bounds.width || !bounds.height) return;
+		let x = event.clientX - drag.offset.x;
+		let y = event.clientY - drag.offset.y;
+		if (released && !drag.moved && !event.shiftKey) {
+			const gridBounds = grid.getBoundingClientRect();
+			const intersection = padGridIntersection(event.clientX - gridBounds.left, event.clientY - gridBounds.top, gridBounds.width, gridBounds.height);
+			if (intersection) {
+				x = gridBounds.left + intersection.x;
+				y = gridBounds.top + intersection.y;
+			}
+		}
+		const next = padValueFromPoint((x - bounds.left) / bounds.width, (y - bounds.top) / bounds.height, props);
+		if (event.shiftKey) {
+			if (!drag.lock) {
+				const dx = Math.abs(event.clientX - drag.start.x);
+				const dy = Math.abs(event.clientY - drag.start.y);
+				if (Math.max(dx, dy) < 3) return;
+				drag.lock = dx >= dy ? "x" : "y";
+				drag.lockValue = { ...value };
+			}
+			const fixed = drag.lock === "x" ? "y" : "x";
+			next[fixed] = drag.lockValue[fixed];
+		} else {
+			drag.lock = void 0;
+			drag.lockValue = void 0;
+		}
+		commit(next);
+	}
+	surface.addEventListener("dblclick", () => commit(normalizePadValue(void 0, props)));
+	surface.addEventListener("pointerdown", (event) => {
+		if (event.button !== 0 || drag) return;
+		event.preventDefault();
+		surface.focus({ preventScroll: true });
+		const bounds = point.getBoundingClientRect();
+		const onPoint = event.target === point;
+		drag = {
+			id: event.pointerId,
+			start: {
+				x: event.clientX,
+				y: event.clientY
+			},
+			value: { ...value },
+			offset: onPoint ? {
+				x: event.clientX - bounds.left - bounds.width / 2,
+				y: event.clientY - bounds.top - bounds.height / 2
+			} : {
+				x: 0,
+				y: 0
+			},
+			moved: false
+		};
+		surface.setPointerCapture(event.pointerId);
+		move(event);
+	});
+	surface.addEventListener("pointermove", move);
+	surface.addEventListener("pointerup", (event) => {
+		if (event.pointerId !== drag?.id) return;
+		move(event, true);
+		endDrag();
+	});
+	surface.addEventListener("pointercancel", (event) => {
+		if (event.pointerId === drag?.id) endDrag();
+	});
+	surface.addEventListener("lostpointercapture", (event) => {
+		if (event.pointerId === drag?.id) endDrag();
+	});
+	surface.addEventListener("keydown", (event) => {
+		if (event.altKey || event.metaKey || event.ctrlKey) return;
+		const next = padValueFromKey(value, event.key, event.shiftKey, props);
+		if (next || event.key === "Home" || event.key === "Escape" && drag) {
+			event.preventDefault();
+			event.stopPropagation();
+			if (next) commit(next);
+			else if (event.key === "Home") {
+				endDrag();
+				commit(normalizePadValue(void 0, props));
+			} else if (drag) {
+				const start = drag.value;
+				endDrag();
+				commit(start);
+			}
+		}
+	});
+	render();
+	return {
+		update(next) {
+			props = next;
+			value = normalizePadValue(next.value, props);
+			render();
+		},
+		destroy() {
+			endDrag();
+			root.remove();
+		}
+	};
+}
+//#endregion
+//#region src/vendor/dialkit/easing-control.ts
+let nextId = 0;
+/** One interaction and fitting implementation for React, Solid, Vue, and Svelte. */
+function mountEasingVisualization(host, initial) {
+	let props = initial;
+	let value = normalizeEase([...props.easing.ease]);
+	let width = 256;
+	let height = 180;
+	let drag;
+	const root = document.createElement("div");
+	root.className = "dialkit-easing-viz";
+	root.setAttribute("aria-label", "Bézier easing curve");
+	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	svg.setAttribute("aria-hidden", "true");
+	const shape = (tag, className) => {
+		const node = document.createElementNS("http://www.w3.org/2000/svg", tag);
+		node.setAttribute("class", className);
+		svg.append(node);
+		return node;
+	};
+	const reference = shape("line", "dialkit-easing-reference");
+	const tangents = [shape("line", "dialkit-easing-tangent"), shape("line", "dialkit-easing-tangent")];
+	const path = shape("path", "dialkit-easing-curve");
+	const endpoints = [shape("circle", "dialkit-easing-endpoint"), shape("circle", "dialkit-easing-endpoint")];
+	const help = document.createElement("span");
+	help.className = "dialkit-easing-instructions";
+	help.id = `dialkit-easing-help-${++nextId}`;
+	help.textContent = "Drag to adjust X from 0 to 1 and Y from -1 to 2. Arrow keys adjust by 0.01. Shift adjusts by 0.1. Escape cancels a drag.";
+	root.append(svg, help);
+	const handles = [0, 1].map((handle) => {
+		const button = document.createElement("button");
+		button.type = "button";
+		button.className = "dialkit-easing-handle";
+		button.setAttribute("aria-describedby", help.id);
+		button.addEventListener("pointerdown", (event) => {
+			if (!props.onChange || event.button !== 0 || drag) return;
+			event.preventDefault();
+			event.stopPropagation();
+			button.focus({ preventScroll: true });
+			measure();
+			const bounds = root.getBoundingClientRect();
+			if (!bounds.width || !bounds.height) return;
+			drag = {
+				id: event.pointerId,
+				handle,
+				x: event.clientX,
+				y: event.clientY,
+				scale: fitEasingGraph(value, width, height).scale,
+				ratioX: width / bounds.width,
+				ratioY: height / bounds.height,
+				value: [...value]
+			};
+			button.setPointerCapture(event.pointerId);
+			button.dataset.dragging = "true";
+		});
+		button.addEventListener("pointermove", move);
+		button.addEventListener("pointerup", (event) => {
+			if (event.pointerId !== drag?.id) return;
+			move(event);
+			endDrag();
+		});
+		button.addEventListener("pointercancel", (event) => {
+			if (event.pointerId === drag?.id) cancelDrag();
+		});
+		button.addEventListener("lostpointercapture", (event) => {
+			if (event.pointerId === drag?.id) endDrag();
+		});
+		button.addEventListener("keydown", (event) => {
+			if (!props.onChange || event.altKey || event.metaKey || event.ctrlKey) return;
+			if (event.key === "Escape" && drag) {
+				event.preventDefault();
+				event.stopPropagation();
+				cancelDrag();
+				return;
+			}
+			const next = easingHandleFromKey(value, handle, event.key, event.shiftKey);
+			if (next) {
+				event.preventDefault();
+				event.stopPropagation();
+				endDrag();
+				commit(next);
+			}
+		});
+		root.append(button);
+		return button;
+	});
+	host.append(root);
+	function line(node, a, b) {
+		node.setAttribute("x1", String(a.x));
+		node.setAttribute("y1", String(a.y));
+		node.setAttribute("x2", String(b.x));
+		node.setAttribute("y2", String(b.y));
+	}
+	function render() {
+		const graph = fitEasingGraph(value, width, height);
+		svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+		line(reference, graph.start, graph.end);
+		[graph.start, graph.end].forEach((point, index) => {
+			line(tangents[index], point, easingGuideEnd(point, graph.handles[index]));
+			endpoints[index].setAttribute("cx", String(point.x));
+			endpoints[index].setAttribute("cy", String(point.y));
+			endpoints[index].setAttribute("r", "2.5");
+			const button = handles[index];
+			button.style.left = `${graph.handles[index].x / width * 100}%`;
+			button.style.top = `${graph.handles[index].y / height * 100}%`;
+			button.disabled = !props.onChange;
+			button.setAttribute("aria-label", `Bézier handle ${index + 1}: X ${value[index * 2]}, Y ${value[index * 2 + 1]}`);
+		});
+		root.setAttribute("role", props.onChange ? "group" : "img");
+		const { start, end, handles: [a, b] } = graph;
+		path.setAttribute("d", `M ${start.x} ${start.y} C ${a.x} ${a.y}, ${b.x} ${b.y}, ${end.x} ${end.y}`);
+	}
+	function measure() {
+		width = root.clientWidth || width;
+		height = root.clientHeight || height;
+		render();
+	}
+	function commit(next) {
+		if (next.every((part, index) => part === value[index])) return;
+		value = next;
+		render();
+		props.onChange?.([...value]);
+	}
+	function move(event) {
+		if (!drag || event.pointerId !== drag.id) return;
+		commit(moveEasingHandle(drag.value, drag.handle, (event.clientX - drag.x) * drag.ratioX, (event.clientY - drag.y) * drag.ratioY, drag.scale));
+	}
+	function endDrag() {
+		if (!drag) return;
+		const { id, handle } = drag;
+		drag = void 0;
+		delete handles[handle].dataset.dragging;
+		if (handles[handle].hasPointerCapture(id)) handles[handle].releasePointerCapture(id);
+	}
+	function cancelDrag() {
+		if (!drag) return;
+		const original = drag.value;
+		endDrag();
+		commit(original);
+	}
+	const observer = new ResizeObserver(measure);
+	observer.observe(root);
+	measure();
+	return {
+		update(next) {
+			const incoming = normalizeEase([...next.easing.ease]);
+			if (!next.onChange || incoming.some((part, index) => part !== value[index])) endDrag();
+			props = next;
+			value = incoming;
+			render();
+		},
+		destroy() {
+			endDrag();
+			observer.disconnect();
+			root.remove();
+		}
+	};
+}
+//#endregion
+//#region src/vendor/dialkit/dropdown-position.ts
+function getDropdownPosition(trigger, portalRoot, options = {}) {
+	const { dropdownHeight = 0, gap = 4, allowAbove = true } = options;
+	const triggerRect = trigger.getBoundingClientRect();
+	const rootRect = portalRoot.getBoundingClientRect();
+	const viewport = window.visualViewport;
+	const viewportTop = viewport?.offsetTop ?? 0;
+	const viewportLeft = viewport?.offsetLeft ?? 0;
+	const viewportHeight = viewport?.height ?? window.innerHeight;
+	const viewportWidth = viewport?.width ?? window.innerWidth;
+	const margin = 8;
+	const spaceBelow = Math.max(0, viewportTop + viewportHeight - triggerRect.bottom - gap - margin);
+	const spaceAbove = Math.max(0, triggerRect.top - viewportTop - gap - margin);
+	const above = allowAbove && spaceBelow < dropdownHeight && spaceAbove > spaceBelow;
+	let maxHeight = Math.min(options.maxHeight ?? 320, above ? spaceAbove : spaceBelow);
+	const height = Math.min(dropdownHeight, maxHeight);
+	const width = Math.min(options.width ?? triggerRect.width, Math.max(0, viewportWidth - margin * 2));
+	let left = Math.max(viewportLeft + margin, Math.min(triggerRect.left, viewportLeft + viewportWidth - width - margin));
+	let top = Math.max(viewportTop + margin, above ? triggerRect.top - height - gap : triggerRect.bottom + gap);
+	if (options.preferSide) {
+		const sideRect = trigger.closest(".up-shell")?.getBoundingClientRect() ?? triggerRect;
+		const before = sideRect.left - width - gap;
+		const after = sideRect.right + gap;
+		if (before >= viewportLeft + margin) left = before;
+		else if (after + width <= viewportLeft + viewportWidth - margin) left = after;
+		maxHeight = Math.min(options.maxHeight ?? 480, viewportHeight - margin * 2);
+		top = Math.max(viewportTop + margin, Math.min(triggerRect.top - 32, viewportTop + viewportHeight - Math.min(dropdownHeight, maxHeight) - margin));
+	}
+	return {
+		top: options.fixed ? top : top - rootRect.top + portalRoot.scrollTop - portalRoot.clientTop,
+		left: options.fixed ? left : left - rootRect.left + portalRoot.scrollLeft - portalRoot.clientLeft,
+		width,
+		above,
+		maxHeight
+	};
+}
+/** Track scroll, resize, panel dragging, and layout animations while a popup is open. */
+function observeDropdownPosition(trigger, update, popup) {
+	let frame = 0;
+	let disposed = false;
+	let previous = "";
+	const tick = () => {
+		if (disposed) return;
+		const floating = popup?.();
+		if (floating?.isConnected && floating.style.position === "fixed" && typeof floating.showPopover === "function" && !floating.matches(":popover-open")) {
+			floating.setAttribute("popover", "manual");
+			floating.showPopover();
+		}
+		const rect = trigger.getBoundingClientRect();
+		const root = getDialKitPortalRoot(trigger)?.getBoundingClientRect();
+		const viewport = window.visualViewport;
+		const next = [
+			rect.x,
+			rect.y,
+			rect.width,
+			rect.height,
+			root?.x,
+			root?.y,
+			popup?.()?.scrollHeight,
+			window.innerWidth,
+			window.innerHeight,
+			viewport?.height,
+			viewport?.offsetTop,
+			viewport?.offsetLeft
+		].join(",");
+		if (next !== previous) {
+			previous = next;
+			update();
+		}
+		if (!disposed) frame = requestAnimationFrame(tick);
+	};
+	tick();
+	window.addEventListener("scroll", update, true);
+	return () => {
+		disposed = true;
+		cancelAnimationFrame(frame);
+		window.removeEventListener("scroll", update, true);
+	};
+}
+function getDialKitPortalRoot(trigger) {
+	return (trigger?.getRootNode())?.querySelector?.(".up-portal") ?? null;
+}
+//#endregion
+//#region src/vendor/dialkit/image-control.ts
+let imageControlId = 0;
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
+function element(tag, className, text) {
+	const el = document.createElement(tag);
+	el.className = className;
+	if (text) el.textContent = text;
+	if (tag === "button") el.type = "button";
+	return el;
+}
+function icon(kind) {
+	const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+	svg.setAttribute("viewBox", "0 0 24 24");
+	svg.setAttribute("fill", "none");
+	svg.setAttribute("stroke", "currentColor");
+	svg.setAttribute("stroke-width", "1.5");
+	svg.setAttribute("stroke-linecap", "round");
+	svg.setAttribute("stroke-linejoin", "round");
+	svg.setAttribute("aria-hidden", "true");
+	const path = document.createElementNS(svg.namespaceURI, "path");
+	path.setAttribute("d", kind === "upload" ? "M12 16V3m-4 4 4-4 4 4M4 15v5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-5" : "M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm-2 13 5-5 4 4 3-3 6 6M15 7h.01");
+	svg.append(path);
+	return svg;
+}
+function imageLabel(value) {
+	if (!value) return "No image";
+	if (value.startsWith("data:") || value.startsWith("blob:")) return "Uploaded image";
+	const name = value.split(/[?#]/)[0].split("/").filter(Boolean).pop();
+	try {
+		return name ? decodeURIComponent(name) : "Image";
+	} catch {
+		return name || "Image";
+	}
+}
+function imageOptions(options = [], uploaded = [], value = "") {
+	const unique = /* @__PURE__ */ new Map();
+	for (const option of [...options, ...uploaded]) {
+		const item = typeof option === "string" ? {
+			value: option,
+			label: imageLabel(option)
+		} : option;
+		if (item.value && !unique.has(item.value)) unique.set(item.value, item);
+	}
+	if (value && !unique.has(value)) unique.set(value, {
+		value,
+		label: imageLabel(value)
+	});
+	return [...unique.values()];
+}
+function preview(className) {
+	const frame = element("span", `dialkit-image-frame ${className}`);
+	const fallback = element("span", "dialkit-image-fallback");
+	fallback.append(icon("image"));
+	const img = element("img", "dialkit-image-img");
+	img.alt = "";
+	img.draggable = false;
+	img.decoding = "async";
+	img.hidden = true;
+	frame.append(fallback, img);
+	let current;
+	img.addEventListener("load", () => {
+		img.hidden = false;
+		fallback.hidden = true;
+		frame.removeAttribute("title");
+	});
+	img.addEventListener("error", () => {
+		img.hidden = true;
+		fallback.hidden = false;
+		frame.title = "Image unavailable";
+	});
+	return {
+		frame,
+		update(value) {
+			if (value === current) return;
+			current = value;
+			img.hidden = true;
+			fallback.hidden = false;
+			frame.removeAttribute("title");
+			if (value) img.src = value;
+			else img.removeAttribute("src");
+		}
+	};
+}
+/** Shared picker so selection, uploads, focus, and positioning match in every framework. */
+function mountImageControl(host, initial, presentation = "popover") {
+	const inline = presentation === "inline";
+	let props = initial;
+	const uploaded = [];
+	let popup;
+	let stopPosition;
+	let updatePicker = () => {};
+	let resetUpload = () => {};
+	let reader;
+	let uploadRequest = 0;
+	const popupId = `dialkit-image-picker-${++imageControlId}`;
+	const trigger = element("button", "dialkit-image-control");
+	const label = element("span", "dialkit-image-label");
+	const name = element("span", "dialkit-image-value");
+	const thumbnail = preview("dialkit-image-thumbnail");
+	trigger.setAttribute("aria-haspopup", "dialog");
+	trigger.setAttribute("aria-expanded", "false");
+	trigger.append(label, name, thumbnail.frame);
+	const fileInput = element("input", "dialkit-image-file");
+	fileInput.type = "file";
+	fileInput.accept = "image/*";
+	fileInput.hidden = true;
+	host.append(trigger, fileInput);
+	if (inline) trigger.style.display = "none";
+	const choices = () => imageOptions(props.options, uploaded, props.value);
+	const render = () => {
+		label.textContent = props.label;
+		name.textContent = choices().find((item) => item.value === props.value)?.label ?? "No image";
+		trigger.setAttribute("aria-label", `Choose ${props.label.toLowerCase()} image: ${name.textContent}`);
+		thumbnail.update(props.value);
+		updatePicker();
+	};
+	const commit = (value) => {
+		props = {
+			...props,
+			value
+		};
+		render();
+		props.onChange(value);
+	};
+	const close = (restoreFocus = false) => {
+		uploadRequest++;
+		reader?.abort();
+		reader = void 0;
+		fileInput.onchange = null;
+		stopPosition?.();
+		stopPosition = void 0;
+		popup?.remove();
+		popup = void 0;
+		updatePicker = () => {};
+		resetUpload = () => {};
+		delete trigger.dataset.open;
+		trigger.setAttribute("aria-expanded", "false");
+		trigger.removeAttribute("aria-controls");
+		document.removeEventListener("pointerdown", outside);
+		document.removeEventListener("focusin", focusOutside);
+		if (restoreFocus) trigger.focus({ preventScroll: true });
+	};
+	const outside = (event) => {
+		if (!popup?.contains(eventTarget(event)) && !host.contains(eventTarget(event))) close();
+	};
+	const focusOutside = (event) => {
+		if (!popup?.contains(eventTarget(event)) && !host.contains(eventTarget(event))) close();
+	};
+	const open = () => {
+		if (popup) {
+			if (!inline) close();
+			return;
+		}
+		const root = inline ? host : getDialKitPortalRoot(host) ?? host;
+		popup = element("div", "dialkit-image-popover");
+		popup.dataset.presentation = presentation;
+		popup.style.position = inline ? "static" : "fixed";
+		popup.id = popupId;
+		popup.setAttribute("role", inline ? "group" : "dialog");
+		const heading = element("div", "dialkit-image-heading");
+		const title = element("span", "dialkit-image-title");
+		const clear = element("button", "dialkit-image-clear", "Remove");
+		clear.addEventListener("click", () => {
+			commit("");
+			if (!inline) close(true);
+		});
+		heading.append(title, clear);
+		const grid = element("div", "dialkit-image-grid");
+		grid.setAttribute("role", "group");
+		grid.setAttribute("aria-label", "Available images");
+		const empty = element("div", "dialkit-image-empty", "Choose an image to get started.");
+		const upload = element("button", "dialkit-button dialkit-image-upload");
+		const uploadText = element("span", "", "Upload image");
+		upload.append(icon("upload"), uploadText);
+		const status = element("div", "dialkit-image-status");
+		status.setAttribute("role", "status");
+		status.hidden = true;
+		upload.addEventListener("click", () => {
+			if (!busy) fileInput.click();
+		});
+		let buttons = [];
+		let previousItems = [];
+		let busy = false;
+		const setBusy = (next) => {
+			busy = next;
+			upload.setAttribute("aria-disabled", String(next));
+			uploadText.textContent = next ? "Loading image…" : "Upload image";
+			grid.setAttribute("aria-busy", String(next));
+		};
+		resetUpload = () => {
+			uploadRequest++;
+			reader?.abort();
+			reader = void 0;
+			setBusy(false);
+			status.hidden = true;
+		};
+		const acceptFile = (file) => {
+			if (busy) return;
+			status.hidden = true;
+			if (!file.type.startsWith("image/") || file.size > MAX_FILE_SIZE) {
+				status.textContent = file.size > MAX_FILE_SIZE ? "Choose an image smaller than 10 MB." : "Choose an image file, such as PNG, JPG, WebP, GIF, or SVG.";
+				status.hidden = false;
+				return;
+			}
+			const request = ++uploadRequest;
+			setBusy(true);
+			const fail = () => {
+				if (request !== uploadRequest) return;
+				setBusy(false);
+				status.textContent = "This image could not be opened. Try another file.";
+				status.hidden = false;
+			};
+			reader = new FileReader();
+			reader.addEventListener("error", fail);
+			reader.addEventListener("load", () => {
+				if (request !== uploadRequest) return;
+				const value = reader?.result;
+				reader = void 0;
+				if (typeof value !== "string") {
+					fail();
+					return;
+				}
+				const check = new Image();
+				check.onerror = fail;
+				check.onload = () => {
+					if (request !== uploadRequest) return;
+					setBusy(false);
+					if (!uploaded.some((item) => item.value === value)) uploaded.push({
+						value,
+						label: file.name
+					});
+					commit(value);
+					buttons.find((button) => button.getAttribute("aria-pressed") === "true")?.focus({ preventScroll: true });
+				};
+				check.src = value;
+			});
+			reader.readAsDataURL(file);
+		};
+		fileInput.onchange = () => {
+			const file = fileInput.files?.[0];
+			fileInput.value = "";
+			if (file) acceptFile(file);
+		};
+		popup.addEventListener("dragover", (event) => {
+			if (!event.dataTransfer?.types.includes("Files")) return;
+			event.preventDefault();
+			event.dataTransfer.dropEffect = "copy";
+			popup.dataset.dragging = "true";
+		});
+		popup.addEventListener("dragleave", (event) => {
+			if (!popup?.contains(event.relatedTarget)) delete popup.dataset.dragging;
+		});
+		popup.addEventListener("drop", (event) => {
+			event.preventDefault();
+			delete popup.dataset.dragging;
+			const file = event.dataTransfer?.files[0];
+			if (file) acceptFile(file);
+		});
+		grid.addEventListener("keydown", (event) => {
+			if (event.metaKey || event.ctrlKey || event.altKey) return;
+			const index = buttons.indexOf(activeElement());
+			if (index < 0) return;
+			const columns = getComputedStyle(grid).gridTemplateColumns.split(" ").length;
+			const next = event.key === "ArrowRight" ? index + 1 : event.key === "ArrowLeft" ? index - 1 : event.key === "ArrowDown" ? index + columns : event.key === "ArrowUp" ? index - columns : event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : void 0;
+			if (next === void 0) return;
+			event.preventDefault();
+			const button = buttons[Math.max(0, Math.min(buttons.length - 1, next))];
+			buttons.forEach((item) => {
+				item.tabIndex = item === button ? 0 : -1;
+			});
+			button.focus({ preventScroll: true });
+			button.scrollIntoView({ block: "nearest" });
+		});
+		popup.addEventListener("keydown", (event) => {
+			if (inline) return;
+			event.stopPropagation();
+			if (event.key === "Escape") {
+				event.preventDefault();
+				close(true);
+			}
+			if (event.key === "Tab") {
+				const first = clear.hidden ? buttons.find((button) => button.tabIndex === 0) ?? upload : clear;
+				if (event.shiftKey && activeElement() === first || !event.shiftKey && activeElement() === upload) {
+					const next = adjacentTabStop(trigger, event.shiftKey);
+					close(true);
+					if (next) {
+						event.preventDefault();
+						next.focus();
+					}
+				}
+			}
+		});
+		updatePicker = () => {
+			popup?.setAttribute("aria-label", `${props.label} image picker`);
+			title.textContent = props.label;
+			clear.hidden = !props.value;
+			clear.setAttribute("aria-label", `Remove ${props.label.toLowerCase()} image`);
+			const items = choices();
+			empty.hidden = items.length > 0;
+			grid.hidden = items.length === 0;
+			if (items.length !== previousItems.length || items.some((item, i) => item.value !== previousItems[i].value || item.label !== previousItems[i].label)) {
+				const focusedIndex = buttons.indexOf(activeElement());
+				previousItems = items;
+				buttons = items.map((item) => {
+					const button = element("button", "dialkit-image-option");
+					button.setAttribute("aria-label", item.label);
+					button.title = item.label;
+					const thumb = preview("dialkit-image-option-preview");
+					thumb.update(item.value);
+					button.append(thumb.frame);
+					button.addEventListener("click", () => {
+						resetUpload();
+						commit(item.value);
+					});
+					return button;
+				});
+				grid.replaceChildren(...buttons);
+				if (focusedIndex >= 0) buttons[Math.min(focusedIndex, buttons.length - 1)]?.focus({ preventScroll: true });
+			}
+			const selected = items.findIndex((item) => item.value === props.value);
+			buttons.forEach((button, index) => {
+				button.setAttribute("aria-pressed", String(index === selected));
+				button.tabIndex = index === Math.max(0, selected) ? 0 : -1;
+			});
+		};
+		popup.append(heading, grid, empty, upload, status);
+		root.append(popup);
+		render();
+		const position = () => {
+			if (!popup) return;
+			if (!host.isConnected || trigger.getClientRects().length === 0) {
+				close();
+				return;
+			}
+			const p = getDropdownPosition(trigger, root, {
+				dropdownHeight: popup.scrollHeight + 2,
+				width: 320,
+				maxHeight: 560,
+				preferSide: true,
+				fixed: true,
+				gap: 8
+			});
+			Object.assign(popup.style, {
+				left: `${p.left}px`,
+				top: `${p.top}px`,
+				width: `${p.width}px`,
+				maxHeight: `${p.maxHeight}px`,
+				transformOrigin: p.above ? "bottom" : "top"
+			});
+		};
+		if (inline) return;
+		stopPosition = observeDropdownPosition(trigger, position, () => popup);
+		trigger.dataset.open = "true";
+		trigger.setAttribute("aria-expanded", "true");
+		trigger.setAttribute("aria-controls", popupId);
+		document.addEventListener("pointerdown", outside);
+		document.addEventListener("focusin", focusOutside);
+		(buttons.find((button) => button.tabIndex === 0) ?? upload).focus({ preventScroll: true });
+	};
+	trigger.addEventListener("click", open);
+	trigger.addEventListener("keydown", (event) => {
+		event.stopPropagation();
+		if (event.key === "Escape") {
+			event.preventDefault();
+			close();
+		}
+		if (event.key === "ArrowDown" && !popup) {
+			event.preventDefault();
+			open();
+		}
+	});
+	render();
+	if (inline) open();
+	return {
+		update(next) {
+			if (next.value !== props.value) resetUpload();
+			props = next;
+			render();
+		},
+		destroy() {
+			close();
+			fileInput.onchange = null;
+			trigger.remove();
+			fileInput.remove();
+		}
+	};
+}
+//#endregion
+//#region src/ui/Vendor.tsx
+function useVendorControl(mount, props) {
+	const host = A$1(null);
+	const control = A$1(null);
+	const latest = A$1(props);
+	latest.current = props;
+	y(() => {
+		control.current = mount(host.current, latest.current);
+		return () => control.current?.destroy();
+	}, []);
+	y(() => {
+		control.current?.update(props);
+	});
+	return host;
+}
+function ImageControl(props) {
+	return /* @__PURE__ */ u("div", {
+		ref: useVendorControl(mountImageControl, props),
+		class: "dialkit-image-host"
+	});
+}
+function DialPad(props) {
+	return /* @__PURE__ */ u("div", {
+		ref: useVendorControl(mountDialPad, props),
+		class: "dialkit-pad-host"
+	});
+}
+function EasingEditor(props) {
+	return /* @__PURE__ */ u("div", {
+		ref: useVendorControl(mountEasingVisualization, props),
+		class: "dialkit-easing-host"
+	});
+}
+//#endregion
+//#region src/ui/Transition.tsx
+const DEFAULT_TIME = {
+	visualDuration: .3,
+	bounce: .2
+};
+const DEFAULT_PHYSICS = {
+	stiffness: 400,
+	damping: 17,
+	mass: 1
+};
+const DEFAULT_EASE = [
+	.25,
+	.1,
+	.25,
+	1
+];
+const clamp$1 = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
+const round = (v, step) => Math.round(v / step) * step;
+function springPhysics(spring, isSimple) {
+	return isSimple ? timeToPhysics(spring.visualDuration ?? DEFAULT_TIME.visualDuration, spring.bounce ?? DEFAULT_TIME.bounce) : {
+		stiffness: spring.stiffness ?? DEFAULT_PHYSICS.stiffness,
+		damping: spring.damping ?? DEFAULT_PHYSICS.damping,
+		mass: spring.mass ?? DEFAULT_PHYSICS.mass
+	};
+}
+/** Rough perceived duration of any transition value, used when switching modes. */
+function durationOf(value) {
+	if (value.type === "easing") return value.duration;
+	if (transitionModeOf(value) === "simple") return value.visualDuration ?? DEFAULT_TIME.visualDuration;
+	return physicsToTime(springPhysics(value, false)).visualDuration;
+}
+function convert(value, to) {
+	const duration = durationOf(value);
+	if (to === "easing") return {
+		type: "easing",
+		duration: clamp$1(round(duration, .05), .1, 2),
+		ease: DEFAULT_EASE
+	};
+	const time = value.type === "spring" && transitionModeOf(value) === "advanced" ? physicsToTime(springPhysics(value, false)) : {
+		visualDuration: duration,
+		bounce: value.type === "spring" ? value.bounce ?? DEFAULT_TIME.bounce : DEFAULT_TIME.bounce
+	};
+	if (to === "simple") return {
+		type: "spring",
+		visualDuration: clamp$1(round(time.visualDuration, .05), .1, 1),
+		bounce: clamp$1(round(time.bounce, .05), 0, 1)
+	};
+	const p = timeToPhysics(time.visualDuration, time.bounce);
+	return {
+		type: "spring",
+		stiffness: clamp$1(round(p.stiffness, 10), 1, 1e3),
+		damping: clamp$1(round(p.damping, 1), 1, 100),
+		mass: 1
+	};
 }
 function SpringViz({ spring, isSimple }) {
 	const W = 256;
 	const H = 140;
-	let stiffness;
-	let damping;
-	let mass;
-	if (isSimple) {
-		const vd = spring.visualDuration ?? .3;
-		const bounce = spring.bounce ?? .2;
-		mass = 1;
-		stiffness = Math.pow(2 * Math.PI / vd, 2);
-		damping = 2 * (1 - bounce) * Math.sqrt(stiffness * mass);
-	} else {
-		stiffness = spring.stiffness ?? 400;
-		damping = spring.damping ?? 17;
-		mass = spring.mass ?? 1;
+	const physics = springPhysics(spring, isSimple);
+	const pts = [];
+	for (let i = 0; i <= 100; i++) {
+		const t = i / 100 * 2;
+		pts.push([t, springProgress(t, physics)]);
 	}
-	const pts = generateSpringCurve(stiffness, damping, mass, 2);
 	const vals = pts.map(([, v]) => v);
 	const lo = Math.min(...vals);
 	const range = Math.max(...vals) - lo || 1;
@@ -2721,103 +5811,65 @@ function SpringViz({ spring, isSimple }) {
 		const y = H - ((v - lo) / range * H * .6 + H * .2);
 		return `${i === 0 ? "M" : "L"} ${x} ${y}`;
 	}).join(" ");
+	const grid = [
+		1,
+		2,
+		3
+	].flatMap((i) => [/* @__PURE__ */ u("line", {
+		x1: W / 4 * i,
+		y1: 0,
+		x2: W / 4 * i,
+		y2: H
+	}, `v${i}`), /* @__PURE__ */ u("line", {
+		x1: 0,
+		y1: H / 4 * i,
+		x2: W,
+		y2: H / 4 * i
+	}, `h${i}`)]);
 	return /* @__PURE__ */ u("svg", {
 		viewBox: `0 0 ${W} ${H}`,
-		class: "up-viz",
-		children: [/* @__PURE__ */ u("line", {
-			x1: 0,
-			y1: H / 2,
-			x2: W,
-			y2: H / 2,
-			stroke: "rgba(255,255,255,0.15)",
-			"stroke-width": "1",
-			"stroke-dasharray": "4,4"
-		}), /* @__PURE__ */ u("path", {
-			d,
-			fill: "none",
-			stroke: "rgba(255,255,255,0.6)",
-			"stroke-width": "2",
-			"stroke-linecap": "round"
-		})]
+		class: "up-viz up-spring-viz",
+		children: [
+			/* @__PURE__ */ u("g", {
+				class: "up-viz-grid",
+				children: grid
+			}),
+			/* @__PURE__ */ u("line", {
+				class: "up-viz-target",
+				x1: 0,
+				y1: H / 2,
+				x2: W,
+				y2: H / 2
+			}),
+			/* @__PURE__ */ u("path", {
+				class: "up-viz-curve",
+				d
+			})
+		]
 	});
 }
-function EasingViz({ easing }) {
-	const S = 200;
-	const pad = 10;
-	const unit = (S - pad * 2) / 2;
-	const toSvg = (nx, ny) => ({
-		x: pad + (nx + .5) * unit,
-		y: pad + (1.5 - ny) * unit
-	});
-	const start = toSvg(0, 0);
-	const end = toSvg(1, 1);
-	const p1 = toSvg(easing.ease[0], easing.ease[1]);
-	const p2 = toSvg(easing.ease[2], easing.ease[3]);
-	return /* @__PURE__ */ u("svg", {
-		viewBox: `0 0 ${S} ${S}`,
-		preserveAspectRatio: "xMidYMid slice",
-		class: "up-viz",
-		style: { aspectRatio: "256/140" },
-		children: [/* @__PURE__ */ u("line", {
-			x1: start.x,
-			y1: start.y,
-			x2: end.x,
-			y2: end.y,
-			stroke: "rgba(255,255,255,0.15)",
-			"stroke-width": "1",
-			"stroke-dasharray": "4,4"
-		}), /* @__PURE__ */ u("path", {
-			d: `M ${start.x} ${start.y} C ${p1.x} ${p1.y}, ${p2.x} ${p2.y}, ${end.x} ${end.y}`,
-			fill: "none",
-			stroke: "rgba(255,255,255,0.6)",
-			"stroke-width": "2",
-			"stroke-linecap": "round"
-		})]
-	});
-}
-function TransitionControl({ panelId, path, label, value, onChange }) {
-	const mode = PaneStore.getTransitionMode(panelId, path);
+function TransitionControl({ label, value, onChange }) {
+	const mode = transitionModeOf(value);
 	const isEasing = mode === "easing";
 	const isSimple = mode === "simple";
 	const spring = value.type === "spring" ? value : {
 		type: "spring",
-		visualDuration: .3,
-		bounce: .2
+		...DEFAULT_TIME
 	};
 	const easing = value.type === "easing" ? value : {
 		type: "easing",
 		duration: .3,
-		ease: [
-			1,
-			-.4,
-			.5,
-			1
-		]
+		ease: DEFAULT_EASE
 	};
+	const cache = A$1({});
+	cache.current[mode] = value;
 	const handleModeChange = q$1((newMode) => {
-		PaneStore.setTransitionMode(panelId, path, newMode);
-		if (newMode === "easing") onChange({
-			type: "easing",
-			duration: value.type === "spring" ? value.visualDuration ?? .3 : value.duration,
-			ease: easing.ease
-		});
-		else if (newMode === "simple") onChange({
-			type: "spring",
-			visualDuration: spring.visualDuration ?? (value.type === "easing" ? value.duration : .3),
-			bounce: spring.bounce ?? .2
-		});
-		else onChange({
-			type: "spring",
-			stiffness: spring.stiffness ?? 200,
-			damping: spring.damping ?? 25,
-			mass: spring.mass ?? 1
-		});
+		const target = newMode;
+		if (target === mode) return;
+		onChange(cache.current[target] ?? convert(value, target));
 	}, [
-		panelId,
-		path,
+		mode,
 		value,
-		spring,
-		easing,
 		onChange
 	]);
 	const updateSpring = q$1((key, val) => {
@@ -2839,14 +5891,6 @@ function TransitionControl({ panelId, path, label, value, onChange }) {
 		isSimple,
 		onChange
 	]);
-	const updateEase = q$1((index, val) => {
-		const newEase = [...easing.ease];
-		newEase[index] = val;
-		onChange({
-			...easing,
-			ease: newEase
-		});
-	}, [easing, onChange]);
 	return /* @__PURE__ */ u(Folder, {
 		title: label,
 		defaultOpen: true,
@@ -2857,7 +5901,13 @@ function TransitionControl({ panelId, path, label, value, onChange }) {
 				gap: "6px"
 			},
 			children: [
-				isEasing ? /* @__PURE__ */ u(EasingViz, { easing }) : /* @__PURE__ */ u(SpringViz, {
+				isEasing ? /* @__PURE__ */ u(EasingEditor, {
+					easing,
+					onChange: (ease) => onChange({
+						...easing,
+						ease
+					})
+				}) : /* @__PURE__ */ u(SpringViz, {
 					spring,
 					isSimple
 				}),
@@ -2885,51 +5935,23 @@ function TransitionControl({ panelId, path, label, value, onChange }) {
 						onChange: handleModeChange
 					})]
 				}),
-				isEasing ? /* @__PURE__ */ u(k$1, { children: [
-					/* @__PURE__ */ u(Slider, {
-						label: "x1",
-						value: easing.ease[0],
-						onChange: (v) => updateEase(0, v),
-						min: 0,
-						max: 1,
-						step: .01
-					}),
-					/* @__PURE__ */ u(Slider, {
-						label: "y1",
-						value: easing.ease[1],
-						onChange: (v) => updateEase(1, v),
-						min: -1,
-						max: 2,
-						step: .01
-					}),
-					/* @__PURE__ */ u(Slider, {
-						label: "x2",
-						value: easing.ease[2],
-						onChange: (v) => updateEase(2, v),
-						min: 0,
-						max: 1,
-						step: .01
-					}),
-					/* @__PURE__ */ u(Slider, {
-						label: "y2",
-						value: easing.ease[3],
-						onChange: (v) => updateEase(3, v),
-						min: -1,
-						max: 2,
-						step: .01
-					}),
-					/* @__PURE__ */ u(Slider, {
-						label: "Duration",
-						value: easing.duration,
-						onChange: (v) => onChange({
-							...easing,
-							duration: v
-						}),
-						min: .1,
-						max: 2,
-						step: .05
+				isEasing ? /* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u(EaseInput, {
+					ease: easing.ease,
+					onChange: (ease) => onChange({
+						...easing,
+						ease
 					})
-				] }) : isSimple ? /* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u(Slider, {
+				}), /* @__PURE__ */ u(Slider, {
+					label: "Duration",
+					value: easing.duration,
+					onChange: (v) => onChange({
+						...easing,
+						duration: v
+					}),
+					min: .1,
+					max: 2,
+					step: .05
+				})] }) : isSimple ? /* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u(Slider, {
 					label: "Duration",
 					value: spring.visualDuration ?? .3,
 					onChange: (v) => updateSpring("visualDuration", v),
@@ -2973,11 +5995,3804 @@ function TransitionControl({ panelId, path, label, value, onChange }) {
 		})
 	});
 }
+/** Editable "x1, y1, x2, y2" field; commits on blur/Enter, ignores invalid input. */
+function EaseInput({ ease, onChange }) {
+	const [draft, setDraft] = d(null);
+	const cancelled = A$1(false);
+	return /* @__PURE__ */ u("div", {
+		class: "up-labeled-row",
+		children: [/* @__PURE__ */ u("span", {
+			class: "up-labeled-row-label",
+			children: "Ease"
+		}), /* @__PURE__ */ u("input", {
+			type: "text",
+			class: "up-text-input up-ease-input",
+			"aria-label": "Bézier coordinates",
+			spellcheck: false,
+			value: draft ?? formatEase([...ease]),
+			onFocus: () => {
+				cancelled.current = false;
+				setDraft(formatEase([...ease]));
+			},
+			onInput: (e) => setDraft(e.target.value),
+			onBlur: () => {
+				const parsed = draft === null || cancelled.current ? null : parseEase(draft);
+				if (parsed) onChange(parsed);
+				setDraft(null);
+			},
+			onKeyDown: (e) => {
+				if (e.key === "Enter") e.target.blur();
+				if (e.key === "Escape") {
+					cancelled.current = true;
+					e.target.blur();
+				}
+			}
+		})]
+	});
+}
+//#endregion
+//#region src/color/data/japanese.ts
+const WAIRO = [
+	[
+		"Sakura",
+		"桜",
+		"#FEDFE1"
+	],
+	[
+		"Momo",
+		"桃",
+		"#F596AA"
+	],
+	[
+		"Kōbai",
+		"紅梅",
+		"#E16B8C"
+	],
+	[
+		"Kurenai",
+		"紅",
+		"#CB1B45"
+	],
+	[
+		"Akane",
+		"茜",
+		"#CB4042"
+	],
+	[
+		"Benihi",
+		"紅緋",
+		"#F75C2F"
+	],
+	[
+		"Sango",
+		"珊瑚",
+		"#F17C67"
+	],
+	[
+		"Kaki",
+		"柿",
+		"#ED784A"
+	],
+	[
+		"Kuchiba",
+		"朽葉",
+		"#E2943B"
+	],
+	[
+		"Kohaku",
+		"琥珀",
+		"#CA7A2C"
+	],
+	[
+		"Yamabuki",
+		"山吹",
+		"#FFB11B"
+	],
+	[
+		"Kihada",
+		"黄蘗",
+		"#FBE251"
+	],
+	[
+		"Uguisu",
+		"鶯",
+		"#6C6A2D"
+	],
+	[
+		"Koke",
+		"苔",
+		"#838A2D"
+	],
+	[
+		"Moegi",
+		"萌黄",
+		"#7BA23F"
+	],
+	[
+		"Nae",
+		"苗",
+		"#86C166"
+	],
+	[
+		"Wakatake",
+		"若竹",
+		"#5DAC81"
+	],
+	[
+		"Tokiwa",
+		"常磐",
+		"#1B813E"
+	],
+	[
+		"Rokushō",
+		"緑青",
+		"#24936E"
+	],
+	[
+		"Mizu",
+		"水",
+		"#81C7D4"
+	],
+	[
+		"Asagi",
+		"浅葱",
+		"#33A6B8"
+	],
+	[
+		"Hanada",
+		"縹",
+		"#006284"
+	],
+	[
+		"Ruri",
+		"瑠璃",
+		"#005CAF"
+	],
+	[
+		"Ai",
+		"藍",
+		"#0D5661"
+	],
+	[
+		"Kon",
+		"紺",
+		"#0F2540"
+	],
+	[
+		"Benikake",
+		"紅掛花",
+		"#4E4F97"
+	],
+	[
+		"Fuji",
+		"藤",
+		"#8B81C3"
+	],
+	[
+		"Shion",
+		"紫苑",
+		"#8F77B5"
+	],
+	[
+		"Murasaki",
+		"紫",
+		"#77428D"
+	],
+	[
+		"Ebi",
+		"葡萄",
+		"#6D2E5B"
+	],
+	[
+		"Sumi",
+		"墨",
+		"#1C1C1C"
+	],
+	[
+		"Nezumi",
+		"鼠",
+		"#828282"
+	],
+	[
+		"Rikyū",
+		"利休鼠",
+		"#707C74"
+	],
+	[
+		"Ginnezu",
+		"銀鼠",
+		"#91989F"
+	],
+	[
+		"Shironeri",
+		"白練",
+		"#FCFAF2"
+	],
+	[
+		"Gofun",
+		"胡粉",
+		"#FFFFFB"
+	],
+	[
+		"Kincha",
+		"金茶",
+		"#C7802D"
+	],
+	[
+		"Kogane",
+		"黄金",
+		"#E9CD4C"
+	],
+	[
+		"Tsuyukusa",
+		"露草",
+		"#2EA9DF"
+	],
+	[
+		"Mizuasagi",
+		"水浅葱",
+		"#66BAB7"
+	]
+];
+const WAGRAD = [
+	[
+		"Yozakura",
+		"夜桜",
+		[
+			"#0F2540",
+			"#8B81C3",
+			"#FEDFE1"
+		]
+	],
+	[
+		"Asagiri",
+		"朝霧",
+		[
+			"#FCFAF2",
+			"#A5DEE4",
+			"#66BAB7"
+		]
+	],
+	[
+		"Yūyake",
+		"夕焼け",
+		[
+			"#4E4F97",
+			"#F75C2F",
+			"#FFB11B"
+		]
+	],
+	[
+		"Hinode",
+		"日の出",
+		[
+			"#0F2540",
+			"#CB1B45",
+			"#FFB11B"
+		]
+	],
+	[
+		"Momiji",
+		"紅葉",
+		[
+			"#6D2E5B",
+			"#CB4042",
+			"#E2943B"
+		]
+	],
+	[
+		"Wakaba",
+		"若葉",
+		[
+			"#5DAC81",
+			"#86C166",
+			"#FBE251"
+		]
+	],
+	[
+		"Aizome",
+		"藍染",
+		[
+			"#0F2540",
+			"#0D5661",
+			"#33A6B8"
+		]
+	],
+	[
+		"Fujinami",
+		"藤波",
+		[
+			"#77428D",
+			"#8B81C3",
+			"#FEDFE1"
+		]
+	],
+	[
+		"Ume",
+		"梅",
+		["#E16B8C", "#FCFAF2"]
+	],
+	[
+		"Tsuki",
+		"月",
+		[
+			"#0F2540",
+			"#4E4F97",
+			"#E9CD4C"
+		]
+	],
+	[
+		"Hotaru",
+		"蛍",
+		[
+			"#0B1013",
+			"#1B813E",
+			"#E9CD4C"
+		]
+	],
+	[
+		"Sumi-e",
+		"墨絵",
+		[
+			"#1C1C1C",
+			"#828282",
+			"#FFFFFB"
+		]
+	],
+	[
+		"Kintsugi",
+		"金継ぎ",
+		[
+			"#1C1C1C",
+			"#C7802D",
+			"#E9CD4C"
+		]
+	],
+	[
+		"Kohaku",
+		"琥珀",
+		["#CA7A2C", "#FFB11B"]
+	],
+	[
+		"Shinkai",
+		"深海",
+		[
+			"#08192D",
+			"#005CAF",
+			"#2EA9DF"
+		]
+	],
+	[
+		"Ajisai",
+		"紫陽花",
+		[
+			"#4E4F97",
+			"#8F77B5",
+			"#F596AA"
+		]
+	],
+	[
+		"Matcha",
+		"抹茶",
+		[
+			"#6C6A2D",
+			"#838A2D",
+			"#C5C56A"
+		]
+	],
+	[
+		"Sango",
+		"珊瑚",
+		["#F17C67", "#FEDFE1"]
+	],
+	[
+		"Tokiwa",
+		"常磐",
+		[
+			"#1B813E",
+			"#24936E",
+			"#66BAB7"
+		]
+	],
+	[
+		"Yuki",
+		"雪",
+		[
+			"#FFFFFB",
+			"#DAE3EA",
+			"#91989F"
+		]
+	],
+	[
+		"Kitsune-bi",
+		"狐火",
+		[
+			"#1C1C1C",
+			"#F75C2F",
+			"#FBE251"
+		]
+	],
+	[
+		"Rikyū",
+		"利休",
+		[
+			"#707C74",
+			"#91989F",
+			"#FCFAF2"
+		]
+	],
+	[
+		"Hanabi",
+		"花火",
+		[
+			"#0F2540",
+			"#CB1B45",
+			"#F596AA",
+			"#FBE251"
+		]
+	],
+	[
+		"Ruri-iro",
+		"瑠璃色",
+		[
+			"#0F2540",
+			"#005CAF",
+			"#81C7D4"
+		]
+	],
+	[
+		"Sakura-fubuki",
+		"桜吹雪",
+		[
+			"#FFFFFB",
+			"#FEDFE1",
+			"#F596AA"
+		]
+	],
+	[
+		"Kōyō",
+		"紅葉狩",
+		[
+			"#E2943B",
+			"#CB4042",
+			"#77428D"
+		]
+	],
+	[
+		"Natsuzora",
+		"夏空",
+		[
+			"#2EA9DF",
+			"#81C7D4",
+			"#FFFFFB"
+		]
+	],
+	[
+		"Kurenai-zome",
+		"紅染",
+		[
+			"#6D2E5B",
+			"#CB1B45",
+			"#F17C67"
+		]
+	]
+];
+const CLASSIC = [
+	["Red", "#EF4444"],
+	["Orange", "#F97316"],
+	["Yellow", "#EAB308"],
+	["Green", "#22C55E"],
+	["Cyan", "#06B6D4"],
+	["Blue", "#3B82F6"],
+	["Violet", "#8B5CF6"],
+	["Pink", "#EC4899"],
+	["Rose", "#F43F5E"]
+];
+//#endregion
+//#region src/ui/color/ScrubField.tsx
+const clamp = (n, min, max) => Math.min(max, Math.max(min, n));
+const DRAG_THRESHOLD = 3;
+/** Pointer lock hides the OS cursor; this stand-in stays where the drag began. */
+function virtualCursor(field) {
+	const root = field.getRootNode();
+	let cursor = root.querySelector(".up-vcursor");
+	if (!cursor) {
+		cursor = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+		cursor.setAttribute("class", "up-vcursor");
+		cursor.setAttribute("viewBox", "0 0 24 24");
+		cursor.innerHTML = "<path d=\"M2 12l5-5v3h10V7l5 5-5 5v-3H7v3z\" fill=\"#fff\" stroke=\"#000\" stroke-width=\"1.2\" stroke-linejoin=\"round\"/>";
+		(root instanceof Document ? root.body : root).appendChild(cursor);
+	}
+	return cursor;
+}
+/**
+* Press and drag left/right to change the value (Shift ×10, Alt ×0.1). The
+* pointer is locked so long drags never hit the screen edge; a press without
+* movement switches to typing.
+*/
+function ScrubField({ label, value, onChange, min, max, step, digits = 0, suffix = "", wrap, class: cls }) {
+	const fieldRef = A$1(null);
+	const inputRef = A$1(null);
+	const [editing, setEditing] = d(false);
+	const [scrubbing, setScrubbing] = d(false);
+	const [draft, setDraft] = d("");
+	const cancelled = A$1(false);
+	const latest = A$1({
+		value,
+		onChange,
+		min,
+		max,
+		step,
+		wrap
+	});
+	latest.current = {
+		value,
+		onChange,
+		min,
+		max,
+		step,
+		wrap
+	};
+	const fmt = (v) => v.toFixed(digits) + suffix;
+	const apply = (v) => {
+		const { min, max, wrap, onChange } = latest.current;
+		onChange(wrap ? ((v - min) % (max - min) + (max - min)) % (max - min) + min : clamp(v, min, max));
+	};
+	y(() => {
+		if (!editing) return;
+		inputRef.current?.focus();
+		inputRef.current?.select();
+	}, [editing]);
+	const onMouseDown = (e) => {
+		const field = fieldRef.current;
+		if (e.button !== 0 || editing || !field) return;
+		e.preventDefault();
+		document.getSelection()?.removeAllRanges();
+		const focused = activeElement();
+		if (focused instanceof HTMLInputElement) focused.blur();
+		const root = field.getRootNode();
+		const locked = () => root.pointerLockElement === field;
+		const cursor = virtualCursor(field);
+		cursor.style.left = `${e.clientX}px`;
+		cursor.style.top = `${e.clientY}px`;
+		const start = latest.current.value;
+		let moved = 0;
+		let acc = 0;
+		const onLockChange = () => cursor.classList.toggle("up-vcursor-on", locked());
+		const onMove = (ev) => {
+			moved += Math.abs(ev.movementX);
+			if (moved < DRAG_THRESHOLD) return;
+			setScrubbing(true);
+			acc += ev.movementX * latest.current.step * (ev.shiftKey ? 10 : ev.altKey ? .1 : 1);
+			apply(start + acc);
+		};
+		const onUp = () => {
+			document.removeEventListener("mousemove", onMove);
+			document.removeEventListener("mouseup", onUp);
+			document.removeEventListener("pointerlockchange", onLockChange);
+			if (locked()) document.exitPointerLock();
+			cursor.classList.remove("up-vcursor-on");
+			setScrubbing(false);
+			if (moved < DRAG_THRESHOLD) {
+				cancelled.current = false;
+				setDraft(fmt(latest.current.value));
+				setEditing(true);
+			}
+		};
+		document.addEventListener("mousemove", onMove);
+		document.addEventListener("mouseup", onUp);
+		document.addEventListener("pointerlockchange", onLockChange);
+		try {
+			field.requestPointerLock()?.catch?.(() => {});
+		} catch {}
+	};
+	const commit = () => {
+		setEditing(false);
+		if (cancelled.current) return;
+		const v = parseFloat(draft);
+		if (!Number.isNaN(v)) apply(v);
+	};
+	return /* @__PURE__ */ u("label", {
+		ref: fieldRef,
+		class: `up-cp-field ${scrubbing ? "up-cp-field-scrubbing" : ""} ${editing ? "up-cp-field-editing" : ""} ${cls ?? ""}`,
+		onMouseDown,
+		children: [/* @__PURE__ */ u("span", { children: label }), /* @__PURE__ */ u("input", {
+			ref: inputRef,
+			spellcheck: false,
+			tabIndex: editing ? 0 : -1,
+			value: editing ? draft : fmt(value),
+			onInput: (e) => setDraft(e.target.value),
+			onBlur: commit,
+			onKeyDown: (e) => {
+				e.stopPropagation();
+				if (e.key === "Enter") inputRef.current?.blur();
+				if (e.key === "Escape") {
+					cancelled.current = true;
+					inputRef.current?.blur();
+				}
+			}
+		})]
+	});
+}
+function HexField({ value, onCommit }) {
+	const [draft, setDraft] = d(null);
+	const inputRef = A$1(null);
+	const cancelled = A$1(false);
+	return /* @__PURE__ */ u("label", {
+		class: "up-cp-field up-cp-field-text",
+		children: [/* @__PURE__ */ u("span", { children: "#" }), /* @__PURE__ */ u("input", {
+			ref: inputRef,
+			spellcheck: false,
+			value: draft ?? value.slice(1, 7).toUpperCase(),
+			onFocus: () => {
+				cancelled.current = false;
+				setDraft(value.slice(1, 7).toUpperCase());
+			},
+			onInput: (e) => setDraft(e.target.value),
+			onBlur: () => {
+				if (draft !== null && !cancelled.current) onCommit("#" + draft.replace(/^#/, ""));
+				setDraft(null);
+			},
+			onKeyDown: (e) => {
+				e.stopPropagation();
+				if (e.key === "Enter") inputRef.current?.blur();
+				if (e.key === "Escape") {
+					cancelled.current = true;
+					inputRef.current?.blur();
+				}
+			}
+		})]
+	});
+}
+//#endregion
+//#region src/ui/color/ColorEditor.tsx
+const clamp01 = (n) => Math.min(1, Math.max(0, n));
+/** Pointer-captured drag that reports the position within the element as 0–1. */
+function dragXY(onMove) {
+	return (e) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		const el = e.currentTarget;
+		el.setPointerCapture(e.pointerId);
+		const report = (ev) => {
+			const r = el.getBoundingClientRect();
+			onMove(clamp01((ev.clientX - r.left) / r.width), clamp01((ev.clientY - r.top) / r.height));
+		};
+		report(e);
+		const up = () => {
+			el.removeEventListener("pointermove", report);
+			el.removeEventListener("pointerup", up);
+		};
+		el.addEventListener("pointermove", report);
+		el.addEventListener("pointerup", up);
+	};
+}
+const FORMATS = [
+	"hex",
+	"oklch",
+	"rgb"
+];
+const nextFormat = (f) => FORMATS[(FORMATS.indexOf(f) + 1) % FORMATS.length];
+function ColorEditor({ color, onChange, format, onFormat, classic, contrastWith }) {
+	const set = (patch) => onChange({
+		...color,
+		...patch
+	});
+	const rgb = hsvToRgb(color);
+	const opaque = toHex({
+		...color,
+		a: 1
+	});
+	const pure = toHex({
+		h: color.h,
+		s: 1,
+		v: 1,
+		a: 1
+	});
+	const EyeDropper = window.EyeDropper;
+	const [l, c, h] = toOklch(color);
+	const setOk = (nl, nc, nh) => onChange(fromOklch(nl, nc, nh, color));
+	const alphaField = /* @__PURE__ */ u(ScrubField, {
+		label: "A",
+		value: color.a * 100,
+		onChange: (v) => set({ a: v / 100 }),
+		min: 0,
+		max: 100,
+		step: .5,
+		suffix: "%",
+		class: "up-cp-field-alpha"
+	});
+	return /* @__PURE__ */ u("div", {
+		class: "up-cp-editor",
+		children: [
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-area",
+				style: { background: `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pure})` },
+				onPointerDown: dragXY((x, y) => set({
+					s: x,
+					v: 1 - y
+				})),
+				children: /* @__PURE__ */ u("i", {
+					class: "up-cp-thumb",
+					style: {
+						left: `${color.s * 100}%`,
+						top: `${(1 - color.v) * 100}%`,
+						background: opaque
+					}
+				})
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-row",
+				children: [
+					EyeDropper && /* @__PURE__ */ u("button", {
+						type: "button",
+						class: "up-cp-icon-btn",
+						title: "Pick from screen",
+						onClick: async () => {
+							try {
+								const { sRGBHex } = await new EyeDropper().open();
+								const picked = parseSolid(sRGBHex, color.h);
+								if (picked) onChange({
+									...picked,
+									a: color.a
+								});
+							} catch {}
+						},
+						children: /* @__PURE__ */ u("svg", {
+							viewBox: "0 0 24 24",
+							children: /* @__PURE__ */ u("path", { d: "M14.5 4.5l5 5M11 8l5 5M4 20l1-4 9.5-9.5 3 3L8 19z" })
+						})
+					}),
+					/* @__PURE__ */ u("div", {
+						class: "up-cp-sliders",
+						children: [/* @__PURE__ */ u("div", {
+							class: "up-cp-slider up-cp-hue",
+							onPointerDown: dragXY((x) => set({ h: x * 359.9 })),
+							children: /* @__PURE__ */ u("i", {
+								class: "up-cp-thumb",
+								style: {
+									left: `${color.h / 360 * 100}%`,
+									background: pure
+								}
+							})
+						}), /* @__PURE__ */ u("div", {
+							class: "up-cp-slider up-cp-alpha",
+							onPointerDown: dragXY((x) => set({ a: Math.round(x * 100) / 100 })),
+							children: [/* @__PURE__ */ u("b", { style: { background: `linear-gradient(to right, transparent, ${opaque})` } }), /* @__PURE__ */ u("i", {
+								class: "up-cp-thumb",
+								style: { left: `${color.a * 100}%` }
+							})]
+						})]
+					}),
+					/* @__PURE__ */ u("div", {
+						class: "up-cp-preview",
+						children: /* @__PURE__ */ u("b", { style: { background: toHex(color) } })
+					})
+				]
+			}),
+			classic && /* @__PURE__ */ u("div", {
+				class: "up-cp-dots",
+				children: CLASSIC.map(([name, hex]) => /* @__PURE__ */ u(Dot, {
+					hex,
+					title: `${name} · ${hex}`,
+					selected: opaque,
+					onPick: (v) => onChange({
+						...parseSolid(v, color.h),
+						a: color.a
+					})
+				}, hex))
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-fields",
+				children: [
+					/* @__PURE__ */ u("button", {
+						type: "button",
+						class: "up-cp-format",
+						title: `Format: ${format.toUpperCase()} (click to switch)`,
+						onClick: onFormat,
+						children: [format.toUpperCase(), /* @__PURE__ */ u("svg", {
+							viewBox: "0 0 24 24",
+							children: /* @__PURE__ */ u("path", { d: "M8 9l4-4 4 4M8 15l4 4 4-4" })
+						})]
+					}),
+					format === "hex" && /* @__PURE__ */ u(HexField, {
+						value: toHex(color, false),
+						onCommit: (hex) => {
+							const parsed = parseSolid(hex, color.h);
+							if (parsed) onChange({
+								...parsed,
+								a: color.a
+							});
+							return !!parsed;
+						}
+					}),
+					format === "oklch" && /* @__PURE__ */ u(k$1, { children: [
+						/* @__PURE__ */ u(ScrubField, {
+							label: "L",
+							value: l * 100,
+							onChange: (v) => setOk(v / 100, c, h),
+							min: 0,
+							max: 100,
+							step: .25
+						}),
+						/* @__PURE__ */ u(ScrubField, {
+							label: "C",
+							value: c,
+							onChange: (v) => setOk(l, v, h),
+							min: 0,
+							max: .37,
+							step: .001,
+							digits: 3,
+							class: "up-cp-field-wide"
+						}),
+						/* @__PURE__ */ u(ScrubField, {
+							label: "H",
+							value: h,
+							onChange: (v) => setOk(l, c, v),
+							min: 0,
+							max: 360,
+							step: .5,
+							wrap: true
+						})
+					] }),
+					format === "rgb" && [
+						0,
+						1,
+						2
+					].map((i) => /* @__PURE__ */ u(ScrubField, {
+						label: "RGB"[i],
+						value: rgb[i] * 255,
+						onChange: (v) => {
+							const next = [...rgb];
+							next[i] = v / 255;
+							onChange(rgbToHsv(next, color.a, color.h));
+						},
+						min: 0,
+						max: 255,
+						step: .5
+					}, i)),
+					alphaField
+				]
+			}),
+			contrastWith && contrastWith.length > 0 && /* @__PURE__ */ u(ContrastBadge, {
+				color,
+				backgrounds: contrastWith
+			})
+		]
+	});
+}
+function Dot({ hex, title, selected, onPick }) {
+	const on = hex.toLowerCase() === selected.toLowerCase();
+	const light = toOklch(parseSolid(hex))[0] > .9;
+	return /* @__PURE__ */ u("button", {
+		type: "button",
+		class: `up-cp-dot ${on ? "up-cp-dot-on" : ""} ${light ? "up-cp-dot-light" : ""}`,
+		style: { "--c": hex },
+		title,
+		onClick: () => onPick(hex)
+	});
+}
+function ContrastBadge({ color, backgrounds }) {
+	const [index, setIndex] = d(0);
+	const bg = backgrounds[index % backgrounds.length];
+	const bgColor = parseSolid(bg);
+	if (!bgColor) return null;
+	const ratio = contrastRatio(color, bgColor);
+	const grade = contrastGrade(ratio);
+	return /* @__PURE__ */ u("button", {
+		type: "button",
+		class: "up-cp-contrast",
+		title: `Contrast against ${bg} (WCAG 2). Click to switch background.`,
+		onClick: () => setIndex((i) => i + 1),
+		children: [
+			/* @__PURE__ */ u("span", {
+				class: "up-cp-contrast-sample",
+				style: {
+					background: bg,
+					color: toHex(color)
+				},
+				children: "Aa"
+			}),
+			/* @__PURE__ */ u("span", {
+				class: "up-cp-contrast-ratio",
+				children: [ratio.toFixed(2), ":1"]
+			}),
+			/* @__PURE__ */ u("span", {
+				class: `up-cp-contrast-grade ${grade === "Fail" ? "up-cp-contrast-fail" : ""}`,
+				children: grade
+			}),
+			/* @__PURE__ */ u("span", {
+				class: "up-cp-contrast-bg",
+				children: ["vs ", formatOf(bg) === "hex" ? bg.toUpperCase() : bg]
+			})
+		]
+	});
+}
+//#endregion
+//#region src/ui/color/GradientEditor.tsx
+/** How far below the bar a dragged stop must go to be removed. */
+const REMOVE_DISTANCE = 28;
+function GradientEditor({ gradient: g, selected, onChange, format, onFormat }) {
+	const barRef = A$1(null);
+	const sel = Math.min(selected, g.stops.length - 1);
+	const update = (patch, nextSel = sel) => onChange({
+		...g,
+		...patch
+	}, nextSel);
+	const removeStop = (i) => {
+		if (g.stops.length <= 2) return;
+		update({ stops: g.stops.filter((_, k) => k !== i) }, Math.max(0, i - 1));
+	};
+	const posAt = (clientX) => {
+		const r = barRef.current.getBoundingClientRect();
+		return Math.min(1, Math.max(0, (clientX - r.left) / r.width));
+	};
+	const onBarDown = (e) => {
+		if (e.button !== 0 || e.target.classList.contains("up-cp-stop")) return;
+		const pos = posAt(e.clientX);
+		update({ stops: [...g.stops, {
+			pos,
+			color: sampleGradient(g, pos)
+		}] }, g.stops.length);
+	};
+	const onStopDown = (i) => (e) => {
+		if (e.button !== 0) return;
+		e.preventDefault();
+		e.stopPropagation();
+		const el = e.currentTarget;
+		el.setPointerCapture(e.pointerId);
+		el.closest(".up-cp-gradient")?.focus({ preventScroll: true });
+		let stops = g.stops;
+		let removing = false;
+		onChange(g, i);
+		const move = (ev) => {
+			const bar = barRef.current.getBoundingClientRect();
+			removing = g.stops.length > 2 && ev.clientY - bar.bottom > REMOVE_DISTANCE;
+			el.classList.toggle("up-cp-stop-removing", removing);
+			stops = stops.map((s, k) => k === i ? {
+				...s,
+				pos: posAt(ev.clientX)
+			} : s);
+			onChange({
+				...g,
+				stops
+			}, i);
+		};
+		const up = () => {
+			el.removeEventListener("pointermove", move);
+			el.removeEventListener("pointerup", up);
+			if (removing) onChange({
+				...g,
+				stops: stops.filter((_, k) => k !== i)
+			}, Math.max(0, i - 1));
+		};
+		el.addEventListener("pointermove", move);
+		el.addEventListener("pointerup", up);
+	};
+	const stop = g.stops[sel];
+	return /* @__PURE__ */ u("div", {
+		class: "up-cp-gradient",
+		tabIndex: -1,
+		onKeyDown: (e) => {
+			if ((e.key === "Delete" || e.key === "Backspace") && !(e.target instanceof HTMLInputElement)) {
+				e.preventDefault();
+				removeStop(sel);
+			}
+		},
+		children: [
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-gbar-wrap",
+				children: /* @__PURE__ */ u("div", {
+					ref: barRef,
+					class: "up-cp-gbar",
+					onPointerDown: onBarDown,
+					title: "Click to add a stop",
+					children: [/* @__PURE__ */ u("b", { style: { background: gradientCss(g, true) } }), g.stops.map((s, i) => /* @__PURE__ */ u("i", {
+						class: `up-cp-stop ${i === sel ? "up-cp-stop-on" : ""}`,
+						style: {
+							left: `${s.pos * 100}%`,
+							background: toHex(s.color)
+						},
+						onPointerDown: onStopDown(i)
+					}, i))]
+				})
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-row up-cp-between",
+				children: [/* @__PURE__ */ u(Segmented, {
+					value: g.type,
+					options: [
+						["linear", "Linear"],
+						["radial", "Radial"],
+						["conic", "Conic"]
+					],
+					onChange: (type) => update({ type })
+				}), /* @__PURE__ */ u(ScrubField, {
+					label: "∠",
+					value: g.angle,
+					onChange: (angle) => update({ angle }),
+					min: 0,
+					max: 360,
+					step: 1,
+					wrap: true,
+					suffix: "°",
+					class: `up-cp-field-angle ${g.type === "radial" ? "up-cp-hidden" : ""}`
+				})]
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-row up-cp-between",
+				children: [/* @__PURE__ */ u(Segmented, {
+					value: g.interp,
+					options: [
+						["srgb", "sRGB"],
+						["oklab", "OKLab"],
+						["oklch", "OKLCH"]
+					],
+					onChange: (interp) => update({ interp })
+				}), /* @__PURE__ */ u("span", {
+					class: "up-cp-hint",
+					children: "blend"
+				})]
+			}),
+			/* @__PURE__ */ u(ColorEditor, {
+				color: stop.color,
+				onChange: (color) => update({ stops: g.stops.map((s, k) => k === sel ? {
+					...s,
+					color
+				} : s) }),
+				format,
+				onFormat
+			})
+		]
+	});
+}
+function Segmented({ value, options, onChange }) {
+	return /* @__PURE__ */ u("div", {
+		class: "up-cp-seg",
+		role: "radiogroup",
+		children: options.map(([v, label]) => /* @__PURE__ */ u("button", {
+			type: "button",
+			role: "radio",
+			"aria-checked": v === value,
+			class: v === value ? "up-cp-seg-on" : "",
+			onClick: () => onChange(v),
+			children: label
+		}, v))
+	});
+}
+//#endregion
+//#region src/color/data/uigradients.ts
+const UIGRADIENTS = [
+	["Omolon", [
+		"#091E3A",
+		"#2F80ED",
+		"#2D9EE0"
+	]],
+	["Farhan", ["#9400D3", "#4B0082"]],
+	["Purple", ["#c84e89", "#F15F79"]],
+	["Ibtesam", ["#00F5A0", "#00D9F5"]],
+	["Radioactive Heat", [
+		"#F7941E",
+		"#72C6EF",
+		"#00A651"
+	]],
+	["The Sky And The Sea", ["#F7941E", "#004E8F"]],
+	["From Ice To Fire", ["#72C6EF", "#004E8F"]],
+	["Blue & Orange", ["#FD8112", "#0085CA"]],
+	["Purple Dream", ["#bf5ae0", "#a811da"]],
+	["Blu", ["#00416A", "#E4E5E6"]],
+	["Summer Breeze", ["#fbed96", "#abecd6"]],
+	["Ver", ["#FFE000", "#799F0C"]],
+	["Ver Black", ["#F7F8F8", "#ACBB78"]],
+	["Combi", [
+		"#00416A",
+		"#799F0C",
+		"#FFE000"
+	]],
+	["Anwar", ["#334d50", "#cbcaa5"]],
+	["Bluelagoo", [
+		"#0052D4",
+		"#4364F7",
+		"#6FB1FC"
+	]],
+	["Lunada", [
+		"#5433FF",
+		"#20BDFF",
+		"#A5FECB"
+	]],
+	["Reaqua", ["#799F0C", "#ACBB78"]],
+	["Mango", ["#ffe259", "#ffa751"]],
+	["Bupe", ["#00416A", "#E4E5E6"]],
+	["Rea", ["#FFE000", "#799F0C"]],
+	["Windy", ["#acb6e5", "#86fde8"]],
+	["Royal Blue", ["#536976", "#292E49"]],
+	["Royal Blue + Petrol", [
+		"#BBD2C5",
+		"#536976",
+		"#292E49"
+	]],
+	["Copper", ["#B79891", "#94716B"]],
+	["Anamnisar", ["#9796f0", "#fbc7d4"]],
+	["Petrol", ["#BBD2C5", "#536976"]],
+	["Sky", ["#076585", "#fff"]],
+	["Sel", ["#00467F", "#A5CC82"]],
+	["Afternoon", ["#000C40", "#607D8B"]],
+	["Skyline", ["#1488CC", "#2B32B2"]],
+	["DIMIGO", ["#ec008c", "#fc6767"]],
+	["Purple Love", ["#cc2b5e", "#753a88"]],
+	["Sexy Blue", ["#2193b0", "#6dd5ed"]],
+	["Blooker20", ["#e65c00", "#F9D423"]],
+	["Sea Blue", ["#2b5876", "#4e4376"]],
+	["Nimvelo", ["#314755", "#26a0da"]],
+	["Hazel", [
+		"#77A1D3",
+		"#79CBCA",
+		"#E684AE"
+	]],
+	["Noon to Dusk", ["#ff6e7f", "#bfe9ff"]],
+	["YouTube", ["#e52d27", "#b31217"]],
+	["Cool Brown", ["#603813", "#b29f94"]],
+	["Harmonic Energy", ["#16A085", "#F4D03F"]],
+	["Playing with Reds", ["#D31027", "#EA384D"]],
+	["Sunny Days", ["#EDE574", "#E1F5C4"]],
+	["Green Beach", ["#02AAB0", "#00CDAC"]],
+	["Intuitive Purple", ["#DA22FF", "#9733EE"]],
+	["Emerald Water", ["#348F50", "#56B4D3"]],
+	["Lemon Twist", ["#3CA55C", "#B5AC49"]],
+	["Monte Carlo", [
+		"#CC95C0",
+		"#DBD4B4",
+		"#7AA1D2"
+	]],
+	["Horizon", ["#003973", "#E5E5BE"]],
+	["Rose Water", ["#E55D87", "#5FC3E4"]],
+	["Frozen", ["#403B4A", "#E7E9BB"]],
+	["Mango Pulp", ["#F09819", "#EDDE5D"]],
+	["Bloody Mary", ["#FF512F", "#DD2476"]],
+	["Aubergine", ["#AA076B", "#61045F"]],
+	["Aqua Marine", ["#1A2980", "#26D0CE"]],
+	["Sunrise", ["#FF512F", "#F09819"]],
+	["Purple Paradise", ["#1D2B64", "#F8CDDA"]],
+	["Stripe", [
+		"#1FA2FF",
+		"#12D8FA",
+		"#A6FFCB"
+	]],
+	["Sea Weed", ["#4CB8C4", "#3CD3AD"]],
+	["Pinky", ["#DD5E89", "#F7BB97"]],
+	["Cherry", ["#EB3349", "#F45C43"]],
+	["Mojito", ["#1D976C", "#93F9B9"]],
+	["Juicy Orange", ["#FF8008", "#FFC837"]],
+	["Mirage", ["#16222A", "#3A6073"]],
+	["Steel Gray", ["#1F1C2C", "#928DAB"]],
+	["Kashmir", ["#614385", "#516395"]],
+	["Electric Violet", ["#4776E6", "#8E54E9"]],
+	["Venice Blue", ["#085078", "#85D8CE"]],
+	["Bora Bora", ["#2BC0E4", "#EAECC6"]],
+	["Moss", ["#134E5E", "#71B280"]],
+	["Shroom Haze", ["#5C258D", "#4389A2"]],
+	["Mystic", ["#757F9A", "#D7DDE8"]],
+	["Midnight City", ["#232526", "#414345"]],
+	["Sea Blizz", ["#1CD8D2", "#93EDC7"]],
+	["Opa", ["#3D7EAA", "#FFE47A"]],
+	["Titanium", ["#283048", "#859398"]],
+	["Mantle", ["#24C6DC", "#514A9D"]],
+	["Dracula", ["#DC2424", "#4A569D"]],
+	["Peach", ["#ED4264", "#FFEDBC"]],
+	["Moonrise", ["#DAE2F8", "#D6A4A4"]],
+	["Clouds", ["#ECE9E6", "#FFFFFF"]],
+	["Stellar", ["#7474BF", "#348AC7"]],
+	["Bourbon", ["#EC6F66", "#F3A183"]],
+	["Calm Darya", ["#5f2c82", "#49a09d"]],
+	["Influenza", ["#C04848", "#480048"]],
+	["Shrimpy", ["#e43a15", "#e65245"]],
+	["Army", ["#414d0b", "#727a17"]],
+	["Miaka", ["#FC354C", "#0ABFBC"]],
+	["Pinot Noir", ["#4b6cb7", "#182848"]],
+	["Day Tripper", ["#f857a6", "#ff5858"]],
+	["Namn", ["#a73737", "#7a2828"]],
+	["Blurry Beach", ["#d53369", "#cbad6d"]],
+	["Vasily", ["#e9d362", "#333333"]],
+	["A Lost Memory", ["#DE6262", "#FFB88C"]],
+	["Petrichor", ["#666600", "#999966"]],
+	["Jonquil", ["#FFEEEE", "#DDEFBB"]],
+	["Sirius Tamed", ["#EFEFBB", "#D4D3DD"]],
+	["Kyoto", ["#c21500", "#ffc500"]],
+	["Misty Meadow", ["#215f00", "#e4e4d9"]],
+	["Aqualicious", ["#50C9C3", "#96DEDA"]],
+	["Moor", ["#616161", "#9bc5c3"]],
+	["Almost", ["#ddd6f3", "#faaca8"]],
+	["Forever Lost", ["#5D4157", "#A8CABA"]],
+	["Winter", ["#E6DADA", "#274046"]],
+	["Nelson", ["#f2709c", "#ff9472"]],
+	["Autumn", ["#DAD299", "#B0DAB9"]],
+	["Candy", ["#D3959B", "#BFE6BA"]],
+	["Reef", ["#00d2ff", "#3a7bd5"]],
+	["The Strain", ["#870000", "#190A05"]],
+	["Dirty Fog", ["#B993D6", "#8CA6DB"]],
+	["Earthly", ["#649173", "#DBD5A4"]],
+	["Virgin", ["#C9FFBF", "#FFAFBD"]],
+	["Ash", ["#606c88", "#3f4c6b"]],
+	["Cherryblossoms", ["#FBD3E9", "#BB377D"]],
+	["Parklife", ["#ADD100", "#7B920A"]],
+	["Dance To Forget", ["#FF4E50", "#F9D423"]],
+	["Starfall", ["#F0C27B", "#4B1248"]],
+	["Red Mist", ["#000000", "#e74c3c"]],
+	["Teal Love", ["#AAFFA9", "#11FFBD"]],
+	["Neon Life", ["#B3FFAB", "#12FFF7"]],
+	["Man of Steel", ["#780206", "#061161"]],
+	["Amethyst", ["#9D50BB", "#6E48AA"]],
+	["Cheer Up Emo Kid", ["#556270", "#FF6B6B"]],
+	["Shore", ["#70e1f5", "#ffd194"]],
+	["Facebook Messenger", ["#00c6ff", "#0072ff"]],
+	["SoundCloud", ["#fe8c00", "#f83600"]],
+	["Behongo", ["#52c234", "#061700"]],
+	["ServQuick", ["#485563", "#29323c"]],
+	["Friday", ["#83a4d4", "#b6fbff"]],
+	["Martini", ["#FDFC47", "#24FE41"]],
+	["Metallic Toad", ["#abbaab", "#ffffff"]],
+	["Between The Clouds", ["#73C8A9", "#373B44"]],
+	["Crazy Orange I", ["#D38312", "#A83279"]],
+	["Hersheys", ["#1e130c", "#9a8478"]],
+	["Talking To Mice Elf", ["#948E99", "#2E1437"]],
+	["Purple Bliss", ["#360033", "#0b8793"]],
+	["Predawn", ["#FFA17F", "#00223E"]],
+	["Endless River", ["#43cea2", "#185a9d"]],
+	["Pastel Orange at the Sun", ["#ffb347", "#ffcc33"]],
+	["Twitch", ["#6441A5", "#2a0845"]],
+	["Atlas", [
+		"#FEAC5E",
+		"#C779D0",
+		"#4BC0C8"
+	]],
+	["Instagram", [
+		"#833ab4",
+		"#fd1d1d",
+		"#fcb045"
+	]],
+	["Flickr", ["#ff0084", "#33001b"]],
+	["Vine", ["#00bf8f", "#001510"]],
+	["Turquoise flow", ["#136a8a", "#267871"]],
+	["Portrait", ["#8e9eab", "#eef2f3"]],
+	["Virgin America", ["#7b4397", "#dc2430"]],
+	["Koko Caramel", ["#D1913C", "#FFD194"]],
+	["Fresh Turboscent", ["#F1F2B5", "#135058"]],
+	["Green to dark", ["#6A9113", "#141517"]],
+	["Ukraine", ["#004FF9", "#FFF94C"]],
+	["Curiosity blue", ["#525252", "#3d72b4"]],
+	["Dark Knight", ["#BA8B02", "#181818"]],
+	["Piglet", ["#ee9ca7", "#ffdde1"]],
+	["Lizard", ["#304352", "#d7d2cc"]],
+	["Sage Persuasion", ["#CCCCB2", "#757519"]],
+	["Between Night and Day", ["#2c3e50", "#3498db"]],
+	["Timber", ["#fc00ff", "#00dbde"]],
+	["Passion", ["#e53935", "#e35d5b"]],
+	["Clear Sky", ["#005C97", "#363795"]],
+	["Master Card", ["#f46b45", "#eea849"]],
+	["Back To Earth", ["#00C9FF", "#92FE9D"]],
+	["Deep Purple", ["#673AB7", "#512DA8"]],
+	["Little Leaf", ["#76b852", "#8DC26F"]],
+	["Netflix", ["#8E0E00", "#1F1C18"]],
+	["Light Orange", ["#FFB75E", "#ED8F03"]],
+	["Green and Blue", ["#c2e59c", "#64b3f4"]],
+	["Poncho", ["#403A3E", "#BE5869"]],
+	["Back to the Future", ["#C02425", "#F0CB35"]],
+	["Blush", ["#B24592", "#F15F79"]],
+	["Inbox", ["#457fca", "#5691c8"]],
+	["Purplin", ["#6a3093", "#a044ff"]],
+	["Pale Wood", ["#eacda3", "#d6ae7b"]],
+	["Haikus", ["#fd746c", "#ff9068"]],
+	["Pizelex", ["#114357", "#F29492"]],
+	["Joomla", ["#1e3c72", "#2a5298"]],
+	["Christmas", ["#2F7336", "#AA3A38"]],
+	["Minnesota Vikings", ["#5614B0", "#DBD65C"]],
+	["Miami Dolphins", ["#4DA0B0", "#D39D38"]],
+	["Forest", ["#5A3F37", "#2C7744"]],
+	["Nighthawk", ["#2980b9", "#2c3e50"]],
+	["Superman", ["#0099F7", "#F11712"]],
+	["Suzy", ["#834d9b", "#d04ed6"]],
+	["Dark Skies", ["#4B79A1", "#283E51"]],
+	["Deep Space", ["#000000", "#434343"]],
+	["Decent", ["#4CA1AF", "#C4E0E5"]],
+	["Colors Of Sky", ["#E0EAFC", "#CFDEF3"]],
+	["Purple White", ["#BA5370", "#F4E2D8"]],
+	["Ali", ["#ff4b1f", "#1fddff"]],
+	["Alihossein", ["#f7ff00", "#db36a4"]],
+	["Shahabi", ["#a80077", "#66ff00"]],
+	["Red Ocean", ["#1D4350", "#A43931"]],
+	["Tranquil", ["#EECDA3", "#EF629F"]],
+	["Transfile", ["#16BFFD", "#CB3066"]],
+	["Sylvia", ["#ff4b1f", "#ff9068"]],
+	["Sweet Morning", ["#FF5F6D", "#FFC371"]],
+	["Politics", ["#2196f3", "#f44336"]],
+	["Bright Vault", ["#00d2ff", "#928DAB"]],
+	["Solid Vault", ["#3a7bd5", "#3a6073"]],
+	["Sunset", ["#0B486B", "#F56217"]],
+	["Grapefruit Sunset", ["#e96443", "#904e95"]],
+	["Deep Sea Space", ["#2C3E50", "#4CA1AF"]],
+	["Dusk", ["#2C3E50", "#FD746C"]],
+	["Minimal Red", ["#F00000", "#DC281E"]],
+	["Royal", ["#141E30", "#243B55"]],
+	["Mauve", ["#42275a", "#734b6d"]],
+	["Frost", ["#000428", "#004e92"]],
+	["Lush", ["#56ab2f", "#a8e063"]],
+	["Firewatch", ["#cb2d3e", "#ef473a"]],
+	["Sherbert", ["#f79d00", "#64f38c"]],
+	["Blood Red", ["#f85032", "#e73827"]],
+	["Sun on the Horizon", ["#fceabb", "#f8b500"]],
+	["IIIT Delhi", ["#808080", "#3fada8"]],
+	["Jupiter", ["#ffd89b", "#19547b"]],
+	["50 Shades of Grey", ["#bdc3c7", "#2c3e50"]],
+	["Dania", ["#BE93C5", "#7BC6CC"]],
+	["Limeade", ["#A1FFCE", "#FAFFD1"]],
+	["Disco", ["#4ECDC4", "#556270"]],
+	["Love Couple", ["#3a6186", "#89253e"]],
+	["Azure Pop", ["#ef32d9", "#89fffd"]],
+	["Nepal", ["#de6161", "#2657eb"]],
+	["Cosmic Fusion", ["#ff00cc", "#333399"]],
+	["Snapchat", ["#fffc00", "#ffffff"]],
+	["Ed's Sunset Gradient", ["#ff7e5f", "#feb47b"]],
+	["Brady Brady Fun Fun", ["#00c3ff", "#ffff1c"]],
+	["Black Rosé", ["#f4c4f3", "#fc67fa"]],
+	["80's Purple", ["#41295a", "#2F0743"]],
+	["Radar", [
+		"#A770EF",
+		"#CF8BF3",
+		"#FDB99B"
+	]],
+	["Ibiza Sunset", ["#ee0979", "#ff6a00"]],
+	["Dawn", ["#F3904F", "#3B4371"]],
+	["Mild", ["#67B26F", "#4ca2cd"]],
+	["Vice City", ["#3494E6", "#EC6EAD"]],
+	["Jaipur", ["#DBE6F6", "#C5796D"]],
+	["Jodhpur", [
+		"#9CECFB",
+		"#65C7F7",
+		"#0052D4"
+	]],
+	["Cocoaa Ice", ["#c0c0aa", "#1cefff"]],
+	["EasyMed", ["#DCE35B", "#45B649"]],
+	["Rose Colored Lenses", ["#E8CBC0", "#636FA4"]],
+	["What lies Beyond", ["#F0F2F0", "#000C40"]],
+	["Roseanna", ["#FFAFBD", "#ffc3a0"]],
+	["Honey Dew", ["#43C6AC", "#F8FFAE"]],
+	["Under the Lake", ["#093028", "#237A57"]],
+	["The Blue Lagoon", ["#43C6AC", "#191654"]],
+	["Can You Feel The Love Tonight", ["#4568DC", "#B06AB3"]],
+	["Very Blue", ["#0575E6", "#021B79"]],
+	["Love and Liberty", ["#200122", "#6f0000"]],
+	["Orca", ["#44A08D", "#093637"]],
+	["Venice", ["#6190E8", "#A7BFE8"]],
+	["Pacific Dream", ["#34e89e", "#0f3443"]],
+	["Learning and Leading", ["#F7971E", "#FFD200"]],
+	["Celestial", ["#C33764", "#1D2671"]],
+	["Purplepine", ["#20002c", "#cbb4d4"]],
+	["Sha la la", ["#D66D75", "#E29587"]],
+	["Mini", ["#30E8BF", "#FF8235"]],
+	["Maldives", ["#B2FEFA", "#0ED2F7"]],
+	["Cinnamint", ["#4AC29A", "#BDFFF3"]],
+	["Html", ["#E44D26", "#F16529"]],
+	["Coal", ["#EB5757", "#000000"]],
+	["Sunkist", ["#F2994A", "#F2C94C"]],
+	["Blue Skies", ["#56CCF2", "#2F80ED"]],
+	["Chitty Chitty Bang Bang", ["#007991", "#78ffd6"]],
+	["Visions of Grandeur", ["#000046", "#1CB5E0"]],
+	["Crystal Clear", ["#159957", "#155799"]],
+	["Mello", ["#c0392b", "#8e44ad"]],
+	["Compare Now", ["#EF3B36", "#FFFFFF"]],
+	["Meridian", ["#283c86", "#45a247"]],
+	["Relay", [
+		"#3A1C71",
+		"#D76D77",
+		"#FFAF7B"
+	]],
+	["Alive", ["#CB356B", "#BD3F32"]],
+	["Scooter", ["#36D1DC", "#5B86E5"]],
+	["Terminal", ["#000000", "#0f9b0f"]],
+	["Telegram", ["#1c92d2", "#f2fcfe"]],
+	["Crimson Tide", ["#642B73", "#C6426E"]],
+	["Socialive", ["#06beb6", "#48b1bf"]],
+	["Subu", [
+		"#0cebeb",
+		"#20e3b2",
+		"#29ffc6"
+	]],
+	["Broken Hearts", ["#d9a7c7", "#fffcdc"]],
+	["Kimoby Is The New Blue", ["#396afc", "#2948ff"]],
+	["Dull", ["#C9D6FF", "#E2E2E2"]],
+	["Purpink", ["#7F00FF", "#E100FF"]],
+	["Orange Coral", ["#ff9966", "#ff5e62"]],
+	["Summer", ["#22c1c3", "#fdbb2d"]],
+	["King Yna", [
+		"#1a2a6c",
+		"#b21f1f",
+		"#fdbb2d"
+	]],
+	["Velvet Sun", ["#e1eec3", "#f05053"]],
+	["Zinc", [
+		"#ADA996",
+		"#F2F2F2",
+		"#DBDBDB",
+		"#EAEAEA"
+	]],
+	["Hydrogen", [
+		"#667db6",
+		"#0082c8",
+		"#0082c8",
+		"#667db6"
+	]],
+	["Argon", [
+		"#03001e",
+		"#7303c0",
+		"#ec38bc",
+		"#fdeff9"
+	]],
+	["Lithium", ["#6D6027", "#D3CBB8"]],
+	["Digital Water", ["#74ebd5", "#ACB6E5"]],
+	["Orange Fun", ["#fc4a1a", "#f7b733"]],
+	["Rainbow Blue", ["#00F260", "#0575E6"]],
+	["Pink Flavour", ["#800080", "#ffc0cb"]],
+	["Sulphur", ["#CAC531", "#F3F9A7"]],
+	["Selenium", ["#3C3B3F", "#605C3C"]],
+	["Delicate", ["#D3CCE3", "#E9E4F0"]],
+	["Ohhappiness", ["#00b09b", "#96c93d"]],
+	["Lawrencium", [
+		"#0f0c29",
+		"#302b63",
+		"#24243e"
+	]],
+	["Relaxing red", ["#fffbd5", "#b20a2c"]],
+	["Taran Tado", ["#23074d", "#cc5333"]],
+	["Bighead", ["#c94b4b", "#4b134f"]],
+	["Sublime Vivid", ["#FC466B", "#3F5EFB"]],
+	["Sublime Light", ["#FC5C7D", "#6A82FB"]],
+	["Pun Yeta", ["#108dc7", "#ef8e38"]],
+	["Quepal", ["#11998e", "#38ef7d"]],
+	["Sand to Blue", ["#3E5151", "#DECBA4"]],
+	["Wedding Day Blues", [
+		"#40E0D0",
+		"#FF8C00",
+		"#FF0080"
+	]],
+	["Shifter", ["#bc4e9c", "#f80759"]],
+	["Red Sunset", [
+		"#355C7D",
+		"#6C5B7B",
+		"#C06C84"
+	]],
+	["Moon Purple", ["#4e54c8", "#8f94fb"]],
+	["Pure Lust", ["#333333", "#dd1818"]],
+	["Slight Ocean View", ["#a8c0ff", "#3f2b96"]],
+	["eXpresso", ["#ad5389", "#3c1053"]],
+	["Shifty", ["#636363", "#a2ab58"]],
+	["Vanusa", ["#DA4453", "#89216B"]],
+	["Evening Night", ["#005AA7", "#FFFDE4"]],
+	["Magic", [
+		"#59C173",
+		"#a17fe0",
+		"#5D26C1"
+	]],
+	["Margo", ["#FFEFBA", "#FFFFFF"]],
+	["Blue Raspberry", ["#00B4DB", "#0083B0"]],
+	["Citrus Peel", ["#FDC830", "#F37335"]],
+	["Sin City Red", ["#ED213A", "#93291E"]],
+	["Rastafari", [
+		"#1E9600",
+		"#FFF200",
+		"#FF0000"
+	]],
+	["Summer Dog", ["#a8ff78", "#78ffd6"]],
+	["Wiretap", [
+		"#8A2387",
+		"#E94057",
+		"#F27121"
+	]],
+	["Burning Orange", ["#FF416C", "#FF4B2B"]],
+	["Ultra Voilet", ["#654ea3", "#eaafc8"]],
+	["By Design", ["#009FFF", "#ec2F4B"]],
+	["Kyoo Tah", ["#544a7d", "#ffd452"]],
+	["Kye Meh", ["#8360c3", "#2ebf91"]],
+	["Kyoo Pal", ["#dd3e54", "#6be585"]],
+	["Metapolis", ["#659999", "#f4791f"]],
+	["Flare", ["#f12711", "#f5af19"]],
+	["Witching Hour", ["#c31432", "#240b36"]],
+	["Azur Lane", [
+		"#7F7FD5",
+		"#86A8E7",
+		"#91EAE4"
+	]],
+	["Neuromancer", ["#f953c6", "#b91d73"]],
+	["Harvey", ["#1f4037", "#99f2c8"]],
+	["Amin", ["#8E2DE2", "#4A00E0"]],
+	["Memariani", [
+		"#aa4b6b",
+		"#6b6b83",
+		"#3b8d99"
+	]],
+	["Yoda", ["#FF0099", "#493240"]],
+	["Cool Sky", [
+		"#2980B9",
+		"#6DD5FA",
+		"#FFFFFF"
+	]],
+	["Dark Ocean", ["#373B44", "#4286f4"]],
+	["Evening Sunshine", ["#b92b27", "#1565C0"]],
+	["JShine", [
+		"#12c2e9",
+		"#c471ed",
+		"#f64f59"
+	]],
+	["Moonlit Asteroid", [
+		"#0F2027",
+		"#203A43",
+		"#2C5364"
+	]],
+	["MegaTron", [
+		"#C6FFDD",
+		"#FBD786",
+		"#f7797d"
+	]],
+	["Cool Blues", ["#2193b0", "#6dd5ed"]],
+	["Piggy Pink", ["#ee9ca7", "#ffdde1"]],
+	["Grade Grey", ["#bdc3c7", "#2c3e50"]],
+	["Telko", [
+		"#F36222",
+		"#5CB644",
+		"#007FC3"
+	]],
+	["Zenta", ["#2A2D3E", "#FECB6E"]],
+	["Electric Peacock", [
+		"#8a2be2",
+		"#0000cd",
+		"#228b22",
+		"#ccff00"
+	]],
+	["Under Blue Green", [
+		"#051937",
+		"#004d7a",
+		"#008793",
+		"#00bf72",
+		"#a8eb12"
+	]],
+	["Lensod", ["#6025F5", "#FF5555"]],
+	["Newspaper", [
+		"#8a2be2",
+		"#ffa500",
+		"#f8f8ff"
+	]],
+	["Dark Blue Gradient", [
+		"#2774ae",
+		"#002E5D",
+		"#002E5D"
+	]],
+	["Dark Blu Two", ["#004680", "#4484BA"]],
+	["Lemon Lime", ["#7ec6bc", "#ebe717"]],
+	["Beleko", [
+		"#ff1e56",
+		"#f9c942",
+		"#1e90ff"
+	]],
+	["Mango Papaya", ["#de8a41", "#2ada53"]],
+	["Unicorn Rainbow", [
+		"#f7f0ac",
+		"#acf7f0",
+		"#f0acf7"
+	]],
+	["Flame", ["#ff0000", "#fdcf58"]],
+	["Blue Red", ["#36B1C7", "#960B33"]],
+	["Twitter", ["#1DA1F2", "#009ffc"]],
+	["Blooze", [
+		"#6da6be",
+		"#4b859e",
+		"#6da6be"
+	]],
+	["Blue Slate", ["#B5B9FF", "#2B2C49"]],
+	["Space Light Green", ["#9FA0A8", "#5C7852"]],
+	["Flower", ["#DCFFBD", "#CC86D1"]],
+	["Elate The Euge", [
+		"#8BDEDA",
+		"#43ADD0",
+		"#998EE0",
+		"#E17DC2",
+		"#EF9393"
+	]],
+	["Peach Sea", ["#E6AE8C", "#A8CECF"]],
+	["Abbas", ["#00fff0", "#0083fe"]],
+	["Winter Woods", [
+		"#333333",
+		"#a2ab58",
+		"#A43931"
+	]],
+	["Ameena", [
+		"#0c0c6d",
+		"#de512b",
+		"#98d0c1",
+		"#5bb226",
+		"#023c0d"
+	]],
+	["Emerald Sea", ["#05386b", "#5cdb95"]],
+	["Bleem", ["#4284DB", "#29EAC4"]],
+	["Coffee Gold", ["#554023", "#c99846"]],
+	["Compass", ["#516b8b", "#056b3b"]],
+	["Andreuzza's", ["#D70652", "#FF025E"]],
+	["Moonwalker", ["#152331", "#000000"]],
+	["Whinehouse", [
+		"#f7f7f7",
+		"#b9a0a0",
+		"#794747",
+		"#4e2020",
+		"#111111"
+	]],
+	["Hyper Blue", ["#59CDE9", "#0A2A88"]],
+	["Racker", [
+		"#EB0000",
+		"#95008A",
+		"#3300FC"
+	]],
+	["After the Rain", [
+		"#ff75c3",
+		"#ffa647",
+		"#ffe83f",
+		"#9fff5b",
+		"#70e2ff",
+		"#cd93ff"
+	]],
+	["Neon Green", ["#81ff8a", "#64965e"]],
+	["Dusty Grass", ["#d4fc79", "#96e6a1"]],
+	["Visual Blue", ["#003d4d", "#00c996"]]
+];
+//#endregion
+//#region src/color/data/wada.ts
+const WADA = {
+	"c": [
+		["Hermosa Pink", "#f9c1ce"],
+		["Corinthian Pink", "#f8b6ba"],
+		["Cameo Pink", "#e0b3b6"],
+		["Fawn", "#d1b0a7"],
+		["Light Brown Drab", "#b59392"],
+		["Coral Red", "#f58e84"],
+		["Fresh Color", "#f6917e"],
+		["Grenadine Pink", "#f48067"],
+		["Eosine Pink", "#f37f94"],
+		["Spinel Red", "#f27291"],
+		["Old Rose", "#d46d7a"],
+		["Eugenia Red | A", "#e2625e"],
+		["Eugenia Red | B", "#da525d"],
+		["Raw Sienna", "#bb7125"],
+		["Vinaceous Tawny", "#c56127"],
+		["Jasper Red", "#eb5324"],
+		["Spectrum Red", "#e31f26"],
+		["Red Orange", "#dd4027"],
+		["Etruscan Red", "#c55347"],
+		["Burnt Sienna", "#ae5224"],
+		["Ochre Red", "#ab544d"],
+		["Scarlet", "#cb2f43"],
+		["Carmine", "#cc1236"],
+		["Indian Lake", "#c53c69"],
+		["Rosolanc Purple", "#b73f74"],
+		["Pomegranite Purple", "#b71f57"],
+		["Hydrangea Red", "#a94151"],
+		["Brick Red", "#a84222"],
+		["Carmine Red", "#a62c37"],
+		["Pompeian Red", "#ab2439"],
+		["Red", "#a72144"],
+		["Brown", "#7c4226"],
+		["Hay's Russet", "#793327"],
+		["Vandyke Red", "#82241f"],
+		["Pansy Purple", "#7d133a"],
+		["Pale Burnt Lake", "#802626"],
+		["Violet Red", "#642d5e"],
+		["Vistoris Lake", "#6d4145"],
+		["Sulpher Yellow", "#f5ecc2"],
+		["Pale Lemon Yellow", "#ffefae"],
+		["Naples Yellow", "#fbe6a0"],
+		["Ivory Buff", "#ebd3a2"],
+		["Seashell Pink", "#fdd4bd"],
+		["Light Pinkish Cinnamon", "#fcc79b"],
+		["Pinkish Cinnamon", "#eeb480"],
+		["Cinnamon Buff", "#fdc57e"],
+		["Cream Yellow", "#fdbf68"],
+		["Golden Yellow", "#f3a257"],
+		["Vinaceous Cinnamon", "#eea78c"],
+		["Ochraceous Salmon", "#d8a37b"],
+		["Isabella Color", "#c5a56e"],
+		["Maple", "#c59f6b"],
+		["Olive Buff", "#c1c494"],
+		["Ecru", "#c2ae93"],
+		["Yellow", "#fff200"],
+		["Lemon Yellow", "#f8ed43"],
+		["Apricot Yellow", "#ffdd00"],
+		["Pyrite Yellow", "#cab356"],
+		["Olive Ocher", "#d6b43e"],
+		["Yellow Ocher", "#e2b540"],
+		["Orange Yellow", "#fcb315"],
+		["Yellow Orange", "#f99d1b"],
+		["Apricot Orange", "#f68c50"],
+		["Orange", "#f37420"],
+		["Peach Red", "#f15a30"],
+		["English Red", "#d96629"],
+		["Cinnamon Rufous", "#c27544"],
+		["Orange Rufous", "#c16b27"],
+		["Sulphine Yellow", "#c19f2c"],
+		["Khaki", "#bc892b"],
+		["Citron Yellow", "#b2b73e"],
+		["Citrine", "#b09f36"],
+		["Buffy Citrine", "#96874d"],
+		["Dark Citrine", "#8b835b"],
+		["Light Grayish Olive", "#848061"],
+		["Krongbergs Green", "#84875e"],
+		["Olive", "#837e31"],
+		["Orange Citrine", "#986f2d"],
+		["Sudan Brown", "#a36752"],
+		["Olive Green", "#6b7140"],
+		["Light Brownish Olive", "#806e4b"],
+		["Deep Grayish Olive", "#635a3a"],
+		["Pale Raw Umber", "#71502f"],
+		["Sepia", "#644b1e"],
+		["Madder Brown", "#762c19"],
+		["Mars Brown Tobacco", "#653514"],
+		["Vandyke Brown", "#4b3317"],
+		["Turquoise Green", "#b5decc"],
+		["Glaucous Green", "#b4cdc2"],
+		["Dark Greenish Glaucous", "#b7c2a9"],
+		["Yellow Green", "#afd472"],
+		["Light Green Yellow", "#c7d14f"],
+		["Night Green", "#87c540"],
+		["Olive Yellow", "#a6a159"],
+		["Artemesia Green", "#709390"],
+		["Andover Green", "#6d7e77"],
+		["Rainette Green", "#8fa071"],
+		["Chromium Green", "#719470"],
+		["Pistachio Green", "#648f7b"],
+		["Sea Green", "#00b49b"],
+		["Benzol Green", "#00978d"],
+		["Light Porcelain Green", "#00908a"],
+		["Green", "#489b6e"],
+		["Dull Viridian Green", "#009465"],
+		["Oil Green", "#819238"],
+		["Diamine Green", "#1a7444"],
+		["Cossack Green", "#437742"],
+		["Lincoln Green", "#555832"],
+		["Blackish Olive", "#42533e"],
+		["Deep Slate Olive", "#253122"],
+		["Nile Blue", "#bce4e5"],
+		["Pale King's Blue", "#a7d4e4"],
+		["Light Glaucous Blue", "#a5c8d1"],
+		["Salvia Blue", "#97acc8"],
+		["Cobalt Green", "#96d1aa"],
+		["Calamine BLue", "#78cdd0"],
+		["Venice Green", "#62c6bf"],
+		["Cerulian Blue", "#0093a5"],
+		["Peacock Blue", "#00939b"],
+		["Green Blue", "#099197"],
+		["Olympic Blue", "#5a82b3"],
+		["Blue", "#006eb8"],
+		["Antwarp Blue", "#007190"],
+		["Helvetia Blue", "#005b8d"],
+		["Dark Medici Blue", "#547076"],
+		["Dusky Green", "#004f46"],
+		["Deep Lyons Blue", "#1c4286"],
+		["Violet Blue", "#40456a"],
+		["Vandar Poel's Blue", "#064f6e"],
+		["Dark Tyrian Blue", "#12354e"],
+		["Dull Violet Black", "#1e0e3f"],
+		["Deep Indigo", "#051230"],
+		["Deep Slate Green", "#112f2c"],
+		["Grayish Lavender - A", "#b5b1d8"],
+		["Grayish Lavender - B", "#c0a9b3"],
+		["Laelia Pink", "#ca92a8"],
+		["Lilac", "#b984af"],
+		["Eupatorium Purple", "#bf5892"],
+		["Light Mauve", "#9a72aa"],
+		["Aconite Violet", "#a36aa5"],
+		["Dull Blue Violet", "#80719e"],
+		["Dark Soft Violet", "#66629c"],
+		["Blue Violet", "#6450a1"],
+		["Purple Drab", "#84565b"],
+		["Deep Violet / Plumbeous", "#70727c"],
+		["Veronia Purple", "#8c4c62"],
+		["Dark Slate Purple", "#704357"],
+		["Taupe Brown", "#7a4456"],
+		["Violet Carmine", "#713b4c"],
+		["Violet", "#4f4086"],
+		["Red Violet", "#59256a"],
+		["Cotinga Purple", "#501345"],
+		["Dusky Madder Violet", "#4e1d4c"],
+		["White", "#ffffff"],
+		["Neutral Gray", "#b6bfc1"],
+		["Mineral Gray", "#a2b0ad"],
+		["Warm Gray", "#a1a39a"],
+		["Slate Color", "#34454c"],
+		["Black", "#111314"]
+	],
+	"k": [
+		[65, 117],
+		[61, 129],
+		[13, 39],
+		[50, 150],
+		[106, 128],
+		[7, 131],
+		[63, 88],
+		[66, 133],
+		[36, 140],
+		[66, 73],
+		[41, 155],
+		[50, 119],
+		[13, 145],
+		[9, 40],
+		[100, 133],
+		[33, 111],
+		[12, 99],
+		[3, 152],
+		[85, 92],
+		[115, 135],
+		[7, 99],
+		[54, 126],
+		[45, 138],
+		[83, 145],
+		[18, 110],
+		[47, 82],
+		[1, 157],
+		[84, 131],
+		[75, 113],
+		[29, 155],
+		[17, 39],
+		[49, 92],
+		[13, 157],
+		[8, 154],
+		[4, 28],
+		[68, 87],
+		[27, 150],
+		[105, 126],
+		[22, 123],
+		[14, 70],
+		[73, 115],
+		[59, 149],
+		[1, 139],
+		[101, 120],
+		[42, 55],
+		[63, 158],
+		[18, 134],
+		[24, 123],
+		[111, 121],
+		[41, 152],
+		[28, 121],
+		[38, 158],
+		[61, 152],
+		[100, 112],
+		[10, 153],
+		[134, 149],
+		[147, 157],
+		[32, 99],
+		[8, 71],
+		[39, 129],
+		[91, 151],
+		[54, 158],
+		[37, 117],
+		[139, 141],
+		[68, 115],
+		[58, 79],
+		[120, 129],
+		[4, 54],
+		[156, 158],
+		[13, 107],
+		[29, 49],
+		[38, 111],
+		[82, 96],
+		[87, 119],
+		[111, 127],
+		[39, 156],
+		[12, 128],
+		[44, 116],
+		[84, 119],
+		[38, 138],
+		[47, 156],
+		[32, 152],
+		[52, 127],
+		[42, 132],
+		[14, 122],
+		[13, 99],
+		[1, 70],
+		[42, 121],
+		[61, 127],
+		[8, 139],
+		[37, 67],
+		[5, 100],
+		[71, 112],
+		[41, 125],
+		[32, 130],
+		[59, 76],
+		[1, 18],
+		[84, 127],
+		[39, 117],
+		[72, 140],
+		[2, 126],
+		[41, 67],
+		[66, 152],
+		[28, 38],
+		[2, 97],
+		[122, 130],
+		[56, 74],
+		[8, 27],
+		[39, 108],
+		[31, 86],
+		[39, 90],
+		[7, 158],
+		[42, 86],
+		[60, 122],
+		[40, 64],
+		[2, 142],
+		[22, 158],
+		[59, 86],
+		[112, 129],
+		[2, 29],
+		[
+			31,
+			49,
+			107
+		],
+		[
+			22,
+			46,
+			100
+		],
+		[
+			5,
+			55,
+			147
+		],
+		[
+			35,
+			59,
+			93
+		],
+		[
+			3,
+			117,
+			127
+		],
+		[
+			41,
+			59,
+			126
+		],
+		[
+			45,
+			98,
+			141
+		],
+		[
+			1,
+			116,
+			138
+		],
+		[
+			56,
+			69,
+			113
+		],
+		[
+			13,
+			28,
+			149
+		],
+		[
+			13,
+			65,
+			118
+		],
+		[
+			38,
+			47,
+			71
+		],
+		[
+			33,
+			71,
+			99
+		],
+		[
+			8,
+			138,
+			150
+		],
+		[
+			38,
+			106,
+			113
+		],
+		[
+			21,
+			103,
+			150
+		],
+		[
+			18,
+			45,
+			98
+		],
+		[
+			47,
+			55,
+			116
+		],
+		[
+			113,
+			131,
+			154
+		],
+		[
+			47,
+			122,
+			157
+		],
+		[
+			63,
+			90,
+			129
+		],
+		[
+			26,
+			68,
+			113
+		],
+		[
+			121,
+			136,
+			156
+		],
+		[
+			24,
+			63,
+			158
+		],
+		[
+			31,
+			70,
+			130
+		],
+		[
+			69,
+			81,
+			105
+		],
+		[
+			9,
+			33,
+			87
+		],
+		[
+			58,
+			60,
+			117
+		],
+		[
+			58,
+			63,
+			132
+		],
+		[
+			42,
+			70,
+			88
+		],
+		[
+			38,
+			61,
+			128
+		],
+		[
+			18,
+			32,
+			112
+		],
+		[
+			8,
+			60,
+			70
+		],
+		[
+			22,
+			54,
+			121
+		],
+		[
+			15,
+			100,
+			131
+		],
+		[
+			58,
+			114,
+			149
+		],
+		[
+			34,
+			58,
+			120
+		],
+		[
+			55,
+			66,
+			92
+		],
+		[
+			69,
+			115,
+			133
+		],
+		[
+			68,
+			82,
+			124
+		],
+		[
+			31,
+			44,
+			123
+		],
+		[
+			10,
+			96,
+			136
+		],
+		[
+			56,
+			87,
+			122
+		],
+		[
+			17,
+			60,
+			149
+		],
+		[
+			2,
+			9,
+			37
+		],
+		[
+			7,
+			40,
+			132
+		],
+		[
+			53,
+			111,
+			128
+		],
+		[
+			55,
+			128,
+			145
+		],
+		[
+			1,
+			39,
+			156
+		],
+		[
+			24,
+			60,
+			150
+		],
+		[
+			35,
+			61,
+			88
+		],
+		[
+			66,
+			122,
+			150
+		],
+		[
+			55,
+			84,
+			87
+		],
+		[
+			1,
+			134,
+			147
+		],
+		[
+			44,
+			52,
+			142
+		],
+		[
+			0,
+			42,
+			115
+		],
+		[
+			35,
+			72,
+			133
+		],
+		[
+			41,
+			112,
+			119
+		],
+		[
+			17,
+			47,
+			126
+		],
+		[
+			45,
+			138,
+			154
+		],
+		[
+			28,
+			149,
+			151
+		],
+		[
+			13,
+			86,
+			131
+		],
+		[
+			144,
+			145,
+			150
+		],
+		[
+			9,
+			41,
+			74
+		],
+		[
+			4,
+			18,
+			39
+		],
+		[
+			32,
+			49,
+			121
+		],
+		[
+			123,
+			134,
+			139
+		],
+		[
+			96,
+			113,
+			114
+		],
+		[
+			55,
+			109,
+			116
+		],
+		[
+			41,
+			65,
+			158
+		],
+		[
+			4,
+			59,
+			121
+		],
+		[
+			46,
+			86,
+			144
+		],
+		[
+			7,
+			40,
+			101
+		],
+		[
+			15,
+			42,
+			120
+		],
+		[
+			9,
+			39,
+			154
+		],
+		[
+			70,
+			111,
+			142
+		],
+		[
+			8,
+			141,
+			154
+		],
+		[
+			19,
+			56,
+			102
+		],
+		[
+			20,
+			80,
+			126
+		],
+		[
+			28,
+			52,
+			97
+		],
+		[
+			7,
+			76,
+			114
+		],
+		[
+			87,
+			114,
+			157
+		],
+		[
+			39,
+			48,
+			107
+		],
+		[
+			24,
+			66,
+			112
+		],
+		[
+			35,
+			48,
+			149
+		],
+		[
+			1,
+			47,
+			66
+		],
+		[
+			78,
+			88,
+			158
+		],
+		[
+			38,
+			119,
+			122
+		],
+		[
+			41,
+			61,
+			113
+		],
+		[
+			45,
+			55,
+			107
+		],
+		[
+			62,
+			93,
+			131
+		],
+		[
+			29,
+			77,
+			113
+		],
+		[
+			48,
+			56,
+			111
+		],
+		[
+			41,
+			78,
+			149
+		],
+		[
+			46,
+			121,
+			137
+		],
+		[
+			15,
+			102,
+			158
+		],
+		[
+			35,
+			49,
+			105
+		],
+		[
+			123,
+			133,
+			144
+		],
+		[
+			15,
+			97,
+			125
+		],
+		[
+			25,
+			49,
+			139
+		],
+		[
+			28,
+			154,
+			158
+		],
+		[
+			59,
+			61,
+			67
+		],
+		[
+			4,
+			49,
+			87
+		],
+		[
+			9,
+			124,
+			147
+		],
+		[
+			22,
+			125,
+			146
+		],
+		[
+			37,
+			46,
+			149
+		],
+		[
+			0,
+			112,
+			117
+		],
+		[
+			28,
+			39,
+			154
+		],
+		[
+			47,
+			109,
+			154
+		],
+		[
+			7,
+			87,
+			114
+		],
+		[
+			2,
+			32,
+			120
+		],
+		[
+			22,
+			44,
+			131
+		],
+		[
+			28,
+			72,
+			127
+		],
+		[
+			45,
+			82,
+			111
+		],
+		[
+			41,
+			61,
+			134
+		],
+		[
+			69,
+			126,
+			143
+		],
+		[
+			28,
+			84,
+			113
+		],
+		[
+			49,
+			151,
+			156
+		],
+		[
+			4,
+			57,
+			88
+		],
+		[
+			6,
+			54,
+			117
+		],
+		[
+			17,
+			39,
+			50,
+			124
+		],
+		[
+			8,
+			19,
+			105,
+			158
+		],
+		[
+			13,
+			41,
+			79,
+			157
+		],
+		[
+			4,
+			14,
+			95,
+			122
+		],
+		[
+			28,
+			104,
+			129,
+			157
+		],
+		[
+			1,
+			27,
+			38,
+			45
+		],
+		[
+			13,
+			56,
+			100,
+			126
+		],
+		[
+			8,
+			69,
+			133,
+			146
+		],
+		[
+			32,
+			53,
+			58,
+			124
+		],
+		[
+			57,
+			64,
+			99,
+			110
+		],
+		[
+			30,
+			54,
+			105,
+			157
+		],
+		[
+			12,
+			13,
+			68,
+			119
+		],
+		[
+			55,
+			62,
+			151,
+			157
+		],
+		[
+			1,
+			38,
+			76,
+			135
+		],
+		[
+			13,
+			57,
+			115,
+			158
+		],
+		[
+			48,
+			63,
+			103,
+			158
+		],
+		[
+			16,
+			60,
+			121,
+			139
+		],
+		[
+			35,
+			44,
+			76,
+			122
+		],
+		[
+			55,
+			119,
+			123,
+			156
+		],
+		[
+			10,
+			48,
+			88,
+			99
+		],
+		[
+			30,
+			39,
+			115,
+			156
+		],
+		[
+			12,
+			41,
+			71,
+			106
+		],
+		[
+			19,
+			44,
+			87,
+			157
+		],
+		[
+			1,
+			17,
+			89,
+			117
+		],
+		[
+			10,
+			56,
+			93,
+			130
+		],
+		[
+			16,
+			41,
+			96,
+			100
+		],
+		[
+			46,
+			61,
+			100,
+			121
+		],
+		[
+			4,
+			13,
+			109,
+			110
+		],
+		[
+			13,
+			35,
+			139,
+			158
+		],
+		[
+			12,
+			38,
+			79,
+			106
+		],
+		[
+			25,
+			114,
+			119,
+			132
+		],
+		[
+			39,
+			63,
+			87,
+			113
+		],
+		[
+			0,
+			34,
+			78,
+			154
+		],
+		[
+			64,
+			73,
+			120,
+			138
+		],
+		[
+			18,
+			53,
+			84,
+			147
+		],
+		[
+			8,
+			42,
+			90,
+			158
+		],
+		[
+			9,
+			24,
+			76,
+			130
+		],
+		[
+			46,
+			58,
+			106,
+			125
+		],
+		[
+			13,
+			48,
+			53,
+			129
+		],
+		[
+			12,
+			107,
+			135,
+			147
+		],
+		[
+			39,
+			100,
+			114,
+			122
+		],
+		[
+			12,
+			51,
+			114,
+			136
+		],
+		[
+			20,
+			35,
+			97,
+			116
+		],
+		[
+			11,
+			56,
+			99,
+			125
+		],
+		[
+			4,
+			19,
+			64,
+			87
+		],
+		[
+			19,
+			60,
+			118,
+			127
+		],
+		[
+			8,
+			57,
+			111,
+			115
+		],
+		[
+			61,
+			83,
+			147,
+			158
+		],
+		[
+			55,
+			91,
+			127,
+			130
+		],
+		[
+			37,
+			39,
+			107,
+			114
+		],
+		[
+			91,
+			99,
+			114,
+			115
+		],
+		[
+			39,
+			44,
+			50,
+			53
+		],
+		[
+			13,
+			87,
+			94,
+			102
+		],
+		[
+			38,
+			46,
+			106,
+			113
+		],
+		[
+			46,
+			54,
+			121,
+			130
+		],
+		[
+			38,
+			49,
+			82,
+			157
+		],
+		[
+			19,
+			61,
+			79,
+			127
+		],
+		[
+			13,
+			55,
+			64,
+			158
+		],
+		[
+			23,
+			48,
+			104,
+			122
+		],
+		[
+			7,
+			46,
+			87,
+			115
+		],
+		[
+			16,
+			41,
+			96,
+			139
+		],
+		[
+			46,
+			53,
+			110,
+			122
+		],
+		[
+			40,
+			64,
+			109,
+			154
+		],
+		[
+			32,
+			46,
+			73,
+			100
+		],
+		[
+			44,
+			56,
+			70,
+			87
+		],
+		[
+			55,
+			100,
+			103,
+			110
+		],
+		[
+			22,
+			133,
+			139,
+			151
+		],
+		[
+			3,
+			21,
+			65,
+			114
+		],
+		[
+			47,
+			62,
+			127,
+			128
+		],
+		[
+			38,
+			44,
+			76,
+			109
+		],
+		[
+			29,
+			46,
+			89,
+			91
+		],
+		[
+			19,
+			61,
+			94,
+			123
+		],
+		[
+			22,
+			54,
+			105,
+			158
+		],
+		[
+			8,
+			32,
+			126,
+			152
+		],
+		[
+			7,
+			38,
+			47,
+			137
+		],
+		[
+			33,
+			103,
+			149,
+			150
+		],
+		[
+			43,
+			53,
+			55,
+			87
+		],
+		[
+			80,
+			108,
+			125,
+			132
+		],
+		[
+			13,
+			56,
+			61,
+			106
+		],
+		[
+			5,
+			38,
+			104,
+			112
+		],
+		[
+			4,
+			38,
+			109,
+			113
+		],
+		[
+			16,
+			27,
+			137,
+			142
+		],
+		[
+			45,
+			70,
+			84,
+			158
+		],
+		[
+			29,
+			120,
+			139,
+			154
+		],
+		[
+			12,
+			40,
+			59,
+			132
+		],
+		[
+			38,
+			64,
+			90,
+			92
+		],
+		[
+			8,
+			13,
+			53,
+			134
+		],
+		[
+			27,
+			62,
+			86,
+			101
+		],
+		[
+			46,
+			134,
+			151,
+			157
+		],
+		[
+			52,
+			110,
+			113,
+			119
+		],
+		[
+			23,
+			130,
+			138,
+			149
+		],
+		[
+			5,
+			21,
+			109,
+			125
+		],
+		[
+			19,
+			55,
+			114,
+			121
+		],
+		[
+			42,
+			76,
+			90,
+			122
+		],
+		[
+			33,
+			61,
+			149,
+			157
+		],
+		[
+			8,
+			32,
+			39,
+			108
+		],
+		[
+			37,
+			135,
+			148,
+			158
+		],
+		[
+			28,
+			60,
+			125,
+			134
+		],
+		[
+			49,
+			65,
+			112,
+			127
+		],
+		[
+			64,
+			99,
+			154,
+			158
+		],
+		[
+			7,
+			106,
+			109,
+			112
+		],
+		[
+			1,
+			46,
+			77,
+			109
+		],
+		[
+			19,
+			41,
+			81,
+			128
+		],
+		[
+			45,
+			126,
+			139,
+			158
+		],
+		[
+			32,
+			110,
+			116,
+			142
+		],
+		[
+			24,
+			87,
+			91,
+			95
+		],
+		[
+			93,
+			99,
+			123,
+			136
+		],
+		[
+			52,
+			106,
+			109,
+			151
+		]
+	]
+};
+//#endregion
+//#region src/color/saved.ts
+const KEY = "uipane:saved-colors";
+const listeners = /* @__PURE__ */ new Set();
+function read() {
+	try {
+		const parsed = JSON.parse(localStorage.getItem(KEY) ?? "[]");
+		return Array.isArray(parsed) ? parsed : [];
+	} catch {
+		return [];
+	}
+}
+let items = read();
+function write(next) {
+	items = next;
+	try {
+		localStorage.setItem(KEY, JSON.stringify(items));
+	} catch {}
+	listeners.forEach((fn) => fn());
+}
+const SavedColors = {
+	get: () => items,
+	add(item) {
+		if (!items.some((i) => i.value === item.value)) write([...items, item]);
+	},
+	remove(value) {
+		write(items.filter((i) => i.value !== value));
+	},
+	subscribe(fn) {
+		listeners.add(fn);
+		return () => listeners.delete(fn);
+	}
+};
+function useSavedColors() {
+	return C(SavedColors.subscribe, SavedColors.get);
+}
+//#endregion
+//#region src/ui/color/Library.tsx
+const CHEVRON = /* @__PURE__ */ u("svg", {
+	viewBox: "0 0 24 24",
+	children: /* @__PURE__ */ u("path", { d: "M9 6l6 6-6 6" })
+});
+/** Collapsible; the body renders on first open so a closed picker stays cheap. */
+function Section({ title, jp, count, defaultOpen = false, free, children }) {
+	const [open, setOpen] = d(defaultOpen);
+	const [built, setBuilt] = d(defaultOpen);
+	return /* @__PURE__ */ u("div", {
+		class: "up-cp-sect",
+		children: [/* @__PURE__ */ u("button", {
+			type: "button",
+			class: `up-cp-sect-head ${open ? "up-cp-sect-open" : ""}`,
+			"aria-expanded": open,
+			onClick: () => {
+				setOpen(!open);
+				setBuilt(true);
+			},
+			children: [
+				title,
+				jp && /* @__PURE__ */ u("span", {
+					class: "up-cp-sect-jp",
+					children: jp
+				}),
+				count !== void 0 && /* @__PURE__ */ u("span", {
+					class: "up-cp-sect-n",
+					children: count
+				}),
+				CHEVRON
+			]
+		}), built && /* @__PURE__ */ u("div", {
+			class: `up-cp-sect-body ${free ? "up-cp-sect-free" : ""}`,
+			hidden: !open,
+			children: children()
+		})]
+	});
+}
+function Chip({ background, title, label, onPick, onRemove }) {
+	return /* @__PURE__ */ u("div", {
+		class: "up-cp-chip",
+		role: "button",
+		tabIndex: 0,
+		title,
+		onClick: onPick,
+		onKeyDown: (e) => {
+			if (e.key === "Enter" || e.key === " ") {
+				e.preventDefault();
+				onPick();
+			}
+		},
+		onContextMenu: onRemove && ((e) => {
+			e.preventDefault();
+			onRemove();
+		}),
+		children: [
+			/* @__PURE__ */ u("b", { style: { background } }),
+			label && /* @__PURE__ */ u("span", {
+				class: "up-cp-chip-label",
+				children: label
+			}),
+			onRemove && /* @__PURE__ */ u("button", {
+				type: "button",
+				class: "up-cp-chip-x",
+				"aria-label": "Remove",
+				onClick: (e) => {
+					e.stopPropagation();
+					onRemove();
+				},
+				children: "×"
+			})
+		]
+	});
+}
+function SavedSection({ kind, current, onPick }) {
+	const items = useSavedColors().filter((i) => i.kind === kind);
+	return /* @__PURE__ */ u(Section, {
+		title: "Saved",
+		defaultOpen: true,
+		free: true,
+		children: () => /* @__PURE__ */ u("div", {
+			class: `up-cp-chips ${kind === "gradient" ? "up-cp-chips-wide" : ""}`,
+			children: [items.map((item) => /* @__PURE__ */ u(Chip, {
+				background: item.value,
+				title: item.value,
+				onPick: () => onPick(item.value),
+				onRemove: () => SavedColors.remove(item.value)
+			}, item.value)), /* @__PURE__ */ u("button", {
+				type: "button",
+				class: "up-cp-chip up-cp-chip-add",
+				title: kind === "solid" ? "Save current color" : "Save current gradient",
+				onClick: () => SavedColors.add({
+					kind,
+					value: current
+				}),
+				children: /* @__PURE__ */ u("svg", {
+					viewBox: "0 0 24 24",
+					children: /* @__PURE__ */ u("path", { d: "M12 5v14M5 12h14" })
+				})
+			})]
+		})
+	});
+}
+const NEUTRAL_CHROMA = .025;
+const BY_HUE = (() => {
+	const hues = CLASSIC.map(([, hex]) => toOklch(parseSolid(hex))[2]);
+	const columns = CLASSIC.map(() => []);
+	const neutrals = [];
+	for (const [, , hex] of WAIRO) {
+		const [l, c, h] = toOklch(parseSolid(hex));
+		if (c < NEUTRAL_CHROMA) {
+			neutrals.push([l, hex]);
+			continue;
+		}
+		const dist = (a) => Math.min(Math.abs(a - h), 360 - Math.abs(a - h));
+		columns[hues.reduce((best, hue, i) => dist(hue) < dist(hues[best]) ? i : best, 0)].push([l, hex]);
+	}
+	const byLightness = (a, b) => b[0] - a[0];
+	columns.forEach((col) => col.sort(byLightness));
+	neutrals.sort(byLightness);
+	const rows = Math.max(...columns.map((c) => c.length));
+	const grid = [];
+	for (let r = 0; r < rows; r++) for (const col of columns) grid.push(col[r]?.[1] ?? null);
+	return {
+		grid,
+		neutrals: neutrals.map(([, hex]) => hex)
+	};
+})();
+function TraditionalSection({ selected, onColor, defaultOpen }) {
+	return /* @__PURE__ */ u(Section, {
+		title: "Traditional colors",
+		jp: "日本の伝統色",
+		count: WAIRO.length,
+		defaultOpen,
+		children: () => /* @__PURE__ */ u(k$1, { children: [
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-dots",
+				children: BY_HUE.grid.map((hex, i) => hex ? /* @__PURE__ */ u(Dot, {
+					hex,
+					title: hex,
+					selected,
+					onPick: onColor
+				}, hex) : /* @__PURE__ */ u("span", {}, `gap-${i}`))
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-dots-label",
+				children: "Neutrals"
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "up-cp-dots",
+				children: BY_HUE.neutrals.map((hex) => /* @__PURE__ */ u(Dot, {
+					hex,
+					title: hex,
+					selected,
+					onPick: onColor
+				}, hex))
+			})
+		] })
+	});
+}
+const WAGRAD_CSS = () => WAGRAD.map(([name, kanji, hexes]) => [
+	name,
+	kanji,
+	gradientCss(gradientFromHexes(hexes))
+]);
+function JapaneseGradientsSection({ onGradient, defaultOpen }) {
+	return /* @__PURE__ */ u(Section, {
+		title: "Japanese gradients",
+		jp: "和",
+		count: WAGRAD.length,
+		defaultOpen,
+		children: () => /* @__PURE__ */ u("div", {
+			class: "up-cp-chips up-cp-chips-wide",
+			children: WAGRAD_CSS().map(([name, kanji, css]) => /* @__PURE__ */ u(Chip, {
+				background: css,
+				title: `${name} ${kanji}`,
+				label: kanji,
+				onPick: () => onGradient(css)
+			}, name + kanji))
+		})
+	});
+}
+function WadaSection({ onColor, onGradient }) {
+	return /* @__PURE__ */ u(Section, {
+		title: "Wada combinations",
+		jp: "配色事典",
+		count: WADA.k.length,
+		children: () => /* @__PURE__ */ u("div", {
+			class: "up-cp-combos",
+			children: WADA.k.map((indexes, n) => /* @__PURE__ */ u("div", {
+				class: "up-cp-combo",
+				children: [
+					/* @__PURE__ */ u("span", {
+						class: "up-cp-combo-no",
+						children: n + 1
+					}),
+					/* @__PURE__ */ u("div", {
+						class: "up-cp-combo-strip",
+						children: indexes.map((i) => {
+							const [name, hex] = WADA.c[i];
+							return /* @__PURE__ */ u("i", {
+								style: { background: hex },
+								title: `${name} · ${hex}`,
+								onClick: () => onColor(hex)
+							}, i);
+						})
+					}),
+					onGradient && /* @__PURE__ */ u("button", {
+						type: "button",
+						title: "Use as gradient",
+						onClick: () => onGradient(gradientCss(gradientFromHexes(indexes.map((i) => WADA.c[i][1])))),
+						children: "⇢"
+					})
+				]
+			}, n))
+		})
+	});
+}
+function UiGradientsSection({ onGradient }) {
+	return /* @__PURE__ */ u(Section, {
+		title: "uiGradients",
+		count: UIGRADIENTS.length,
+		children: () => /* @__PURE__ */ u(UiGradientsBody, { onGradient })
+	});
+}
+function UiGradientsBody({ onGradient }) {
+	const [query, setQuery] = d("");
+	const q = query.trim().toLowerCase();
+	return /* @__PURE__ */ u(k$1, { children: [/* @__PURE__ */ u("input", {
+		class: "up-cp-search",
+		placeholder: `Search ${UIGRADIENTS.length} gradients…`,
+		value: query,
+		onInput: (e) => setQuery(e.target.value),
+		onKeyDown: (e) => e.stopPropagation()
+	}), /* @__PURE__ */ u("div", {
+		class: "up-cp-chips up-cp-chips-wide",
+		children: UIGRADIENTS.filter(([name]) => name.toLowerCase().includes(q)).map(([name, colors]) => {
+			const css = gradientCss(gradientFromHexes(colors));
+			return /* @__PURE__ */ u(Chip, {
+				background: css,
+				title: name,
+				onPick: () => onGradient(css)
+			}, name);
+		})
+	})] });
+}
+//#endregion
+//#region src/ui/color/ColorControl.tsx
+const POPOVER_WIDTH = 288;
+const FALLBACK = {
+	h: 0,
+	s: 0,
+	v: 0,
+	a: 1
+};
+const TAB_ICONS = {
+	solid: /* @__PURE__ */ u("svg", {
+		viewBox: "0 0 24 24",
+		children: /* @__PURE__ */ u("circle", {
+			cx: "12",
+			cy: "12",
+			r: "8",
+			fill: "currentColor"
+		})
+	}),
+	gradient: /* @__PURE__ */ u("svg", {
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "2",
+		children: [/* @__PURE__ */ u("circle", {
+			cx: "12",
+			cy: "12",
+			r: "8"
+		}), /* @__PURE__ */ u("path", {
+			d: "M12 4a8 8 0 0 1 0 16z",
+			fill: "currentColor"
+		})]
+	}),
+	library: /* @__PURE__ */ u("svg", {
+		viewBox: "0 0 24 24",
+		fill: "currentColor",
+		children: [
+			/* @__PURE__ */ u("rect", {
+				x: "4",
+				y: "4",
+				width: "7",
+				height: "7",
+				rx: "2"
+			}),
+			/* @__PURE__ */ u("rect", {
+				x: "13",
+				y: "4",
+				width: "7",
+				height: "7",
+				rx: "2",
+				opacity: ".6"
+			}),
+			/* @__PURE__ */ u("rect", {
+				x: "4",
+				y: "13",
+				width: "7",
+				height: "7",
+				rx: "2",
+				opacity: ".6"
+			}),
+			/* @__PURE__ */ u("rect", {
+				x: "13",
+				y: "13",
+				width: "7",
+				height: "7",
+				rx: "2",
+				opacity: ".35"
+			})
+		]
+	})
+};
+function ColorControl({ label, value, onChange, portalContainer, gradient, contrast }) {
+	const allowGradient = !!gradient || isGradient(value);
+	const rowRef = A$1(null);
+	const swatchRef = A$1(null);
+	const popRef = A$1(null);
+	const [open, setOpen] = d(false);
+	const [solid, setSolid] = d(() => (isGradient(value) ? null : parseSolid(value)) ?? FALLBACK);
+	const [grad, setGrad] = d(() => parseGradient(value) ?? gradientFromHexes([
+		"#0F2540",
+		"#8B81C3",
+		"#FEDFE1"
+	]));
+	const [sel, setSel] = d(0);
+	const [format, setFormat] = d(() => formatOf(value));
+	const [tab, setTab] = d(() => isGradient(value) ? "gradient" : "solid");
+	const [draft, setDraft] = d(null);
+	const lastEmitted = A$1(value);
+	y(() => {
+		if (value === lastEmitted.current) return;
+		lastEmitted.current = value;
+		if (isGradient(value)) {
+			const g = parseGradient(value);
+			if (g) setGrad(g);
+		} else {
+			const c = parseSolid(value, solid.h);
+			if (c) setSolid(c);
+			setFormat(formatOf(value));
+		}
+	}, [value]);
+	const emit = (next) => {
+		lastEmitted.current = next;
+		onChange(next);
+	};
+	const emitSolid = (c, f = format) => {
+		setSolid(c);
+		emit(formatSolid(c, f));
+	};
+	const emitGradient = (g, nextSel = sel) => {
+		setGrad(g);
+		setSel(nextSel);
+		emit(gradientCss(g));
+	};
+	const pickColor = (hex) => {
+		emitSolid({
+			...parseSolid(hex, solid.h) ?? FALLBACK,
+			a: 1
+		});
+		setTab("solid");
+	};
+	const pickGradient = (css) => {
+		const g = parseGradient(css);
+		if (!g) return;
+		emitGradient(g, 0);
+		setTab("gradient");
+	};
+	const pickSaved = (v) => isGradient(v) ? pickGradient(v) : pickColor(v);
+	const switchTab = (next) => {
+		setTab(next);
+		if (next === "solid" && isGradient(value)) emitSolid({ ...grad.stops[Math.min(sel, grad.stops.length - 1)].color });
+		if (next === "gradient" && !isGradient(value)) emitGradient(grad);
+	};
+	const cycleFormat = () => {
+		const f = nextFormat(format);
+		setFormat(f);
+		if (!isGradient(value)) emitSolid(solid, f);
+	};
+	const close = q$1((refocus = false) => {
+		setOpen(false);
+		if (refocus) swatchRef.current?.focus({ preventScroll: true });
+	}, []);
+	_(() => {
+		if (!open || !portalContainer) return;
+		const row = rowRef.current;
+		const update = () => {
+			const pop = popRef.current;
+			if (!pop) return;
+			const p = getDropdownPosition(row, portalContainer, {
+				dropdownHeight: pop.scrollHeight + 2,
+				width: POPOVER_WIDTH,
+				maxHeight: 640,
+				preferSide: true,
+				fixed: true,
+				gap: 8
+			});
+			Object.assign(pop.style, {
+				left: `${p.left}px`,
+				top: `${p.top}px`,
+				width: `${p.width}px`,
+				maxHeight: `${p.maxHeight}px`,
+				transformOrigin: p.above ? "bottom" : "top"
+			});
+		};
+		const stop = observeDropdownPosition(row, update, () => popRef.current);
+		const outside = (e) => {
+			const path = e.composedPath();
+			if (!path.includes(popRef.current) && !path.includes(row)) close();
+		};
+		const onKey = (e) => {
+			if (e.key === "Escape") close(true);
+		};
+		document.addEventListener("pointerdown", outside, true);
+		window.addEventListener("keydown", onKey);
+		return () => {
+			stop();
+			document.removeEventListener("pointerdown", outside, true);
+			window.removeEventListener("keydown", onKey);
+		};
+	}, [
+		open,
+		portalContainer,
+		close
+	]);
+	const isGrad = isGradient(value);
+	const solidHex = toHex({
+		...solid,
+		a: 1
+	});
+	const contrastWith = [...new Set([
+		contrast,
+		"#ffffff",
+		"#000000"
+	].filter((c) => !!c))];
+	const tabs = allowGradient ? [
+		"solid",
+		"gradient",
+		"library"
+	] : ["solid", "library"];
+	return /* @__PURE__ */ u("div", {
+		ref: rowRef,
+		class: "dialkit-color-control",
+		"data-open": open ? "true" : void 0,
+		children: [
+			/* @__PURE__ */ u("span", {
+				class: "dialkit-color-label",
+				children: label
+			}),
+			/* @__PURE__ */ u("div", {
+				class: "dialkit-color-inputs",
+				children: [/* @__PURE__ */ u("input", {
+					class: "dialkit-color-value",
+					spellcheck: false,
+					"aria-label": `${label} color value`,
+					value: draft ?? value,
+					title: value,
+					onFocus: () => setDraft(value),
+					onInput: (e) => setDraft(e.target.value),
+					onBlur: () => {
+						const text = draft?.trim() ?? "";
+						setDraft(null);
+						if (!text || text === value) return;
+						if (isGradient(text) ? allowGradient && parseGradient(text) : parseSolid(text)) {
+							lastEmitted.current = "";
+							onChange(text);
+						}
+					},
+					onKeyDown: (e) => {
+						e.stopPropagation();
+						if (e.key === "Enter") e.target.blur();
+						if (e.key === "Escape") {
+							setDraft(value);
+							e.target.blur();
+						}
+					}
+				}), /* @__PURE__ */ u("button", {
+					ref: swatchRef,
+					type: "button",
+					class: "dialkit-color-swatch up-cp-swatch",
+					"aria-haspopup": "dialog",
+					"aria-expanded": open,
+					"aria-label": `Pick ${label.toLowerCase()} color`,
+					style: { "--up-swatch": isGrad ? value : `linear-gradient(${value}, ${value})` },
+					onClick: () => setOpen(!open)
+				})]
+			}),
+			open && portalContainer && $(/* @__PURE__ */ u("div", {
+				ref: popRef,
+				class: "up-cp-pop",
+				role: "dialog",
+				"aria-label": `${label} color picker`,
+				style: { position: "fixed" },
+				onKeyDown: (e) => {
+					if (e.key === "Escape") {
+						e.preventDefault();
+						close(true);
+					}
+					e.stopPropagation();
+				},
+				children: [
+					/* @__PURE__ */ u("div", {
+						class: "up-cp-tabs",
+						role: "tablist",
+						children: tabs.map((t) => /* @__PURE__ */ u("button", {
+							type: "button",
+							role: "tab",
+							"aria-selected": tab === t,
+							class: `up-cp-tab ${tab === t ? "up-cp-tab-on" : ""}`,
+							onClick: () => switchTab(t),
+							children: [TAB_ICONS[t], t[0].toUpperCase() + t.slice(1)]
+						}, t))
+					}),
+					tab === "solid" && /* @__PURE__ */ u(k$1, { children: [
+						/* @__PURE__ */ u(ColorEditor, {
+							color: solid,
+							onChange: (c) => emitSolid(c),
+							format,
+							onFormat: cycleFormat,
+							classic: true,
+							contrastWith
+						}),
+						/* @__PURE__ */ u(SavedSection, {
+							kind: "solid",
+							current: formatSolid(solid, format),
+							onPick: pickSaved
+						}),
+						/* @__PURE__ */ u(TraditionalSection, {
+							selected: isGrad ? "" : solidHex,
+							onColor: pickColor,
+							defaultOpen: true
+						})
+					] }),
+					tab === "gradient" && /* @__PURE__ */ u(k$1, { children: [
+						/* @__PURE__ */ u(GradientEditor, {
+							gradient: grad,
+							selected: sel,
+							onChange: emitGradient,
+							format,
+							onFormat: () => setFormat(nextFormat(format))
+						}),
+						/* @__PURE__ */ u(SavedSection, {
+							kind: "gradient",
+							current: gradientCss(grad),
+							onPick: pickSaved
+						}),
+						/* @__PURE__ */ u(JapaneseGradientsSection, { onGradient: pickGradient })
+					] }),
+					tab === "library" && /* @__PURE__ */ u(k$1, { children: [
+						allowGradient && /* @__PURE__ */ u(JapaneseGradientsSection, {
+							onGradient: pickGradient,
+							defaultOpen: true
+						}),
+						/* @__PURE__ */ u(TraditionalSection, {
+							selected: isGrad ? "" : solidHex,
+							onColor: pickColor,
+							defaultOpen: !allowGradient
+						}),
+						/* @__PURE__ */ u(WadaSection, {
+							onColor: pickColor,
+							onGradient: allowGradient ? pickGradient : void 0
+						}),
+						allowGradient && /* @__PURE__ */ u(UiGradientsSection, { onGradient: pickGradient })
+					] })
+				]
+			}), portalContainer)
+		]
+	});
+}
 //#endregion
 //#region src/ui/Panel.tsx
-function Panel({ panel, values, portalContainer }) {
+function Panel({ panel, values, portalContainer, activeShortcutPath }) {
 	const renderControl = (control) => {
 		const value = values[control.path];
+		const set = (v) => PaneStore.updateValue(panel.id, control.path, v);
+		const shortcutActive = activeShortcutPath === control.path;
 		switch (control.type) {
 			case "slider": return /* @__PURE__ */ u(Slider, {
 				label: control.label,
@@ -2985,12 +9800,16 @@ function Panel({ panel, values, portalContainer }) {
 				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v),
 				min: control.min ?? 0,
 				max: control.max ?? 100,
-				step: control.step ?? 1
+				step: control.step ?? 1,
+				shortcut: control.shortcut,
+				shortcutActive
 			}, control.path);
 			case "toggle": return /* @__PURE__ */ u(Toggle, {
 				label: control.label,
 				checked: value,
-				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v)
+				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v),
+				shortcut: control.shortcut,
+				shortcutActive
 			}, control.path);
 			case "action": return /* @__PURE__ */ u(Action, {
 				label: control.label,
@@ -3014,14 +9833,29 @@ function Panel({ panel, values, portalContainer }) {
 				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v),
 				placeholder: control.placeholder
 			}, control.path);
-			case "color": return /* @__PURE__ */ u(ColorPicker, {
+			case "color": return /* @__PURE__ */ u(ColorControl, {
 				label: control.label,
 				value,
-				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v)
+				onChange: set,
+				portalContainer,
+				gradient: control.gradient,
+				contrast: control.contrast
+			}, control.path);
+			case "image": return /* @__PURE__ */ u(ImageControl, {
+				label: control.label,
+				value,
+				options: control.options,
+				onChange: set
+			}, control.path);
+			case "pad": return /* @__PURE__ */ u(DialPad, {
+				label: control.label,
+				value,
+				x: control.pad?.x,
+				y: control.pad?.y,
+				labels: control.pad?.labels,
+				onChange: set
 			}, control.path);
 			case "transition": return /* @__PURE__ */ u(TransitionControl, {
-				panelId: panel.id,
-				path: control.path,
 				label: control.label,
 				value,
 				onChange: (v) => PaneStore.updateValue(panel.id, control.path, v)
@@ -3040,8 +9874,273 @@ function Panel({ panel, values, portalContainer }) {
 	});
 }
 //#endregion
+//#region src/ui/Preset.tsx
+function PresetBar({ panelId, presets, activePresetId, portalContainer }) {
+	const [isOpen, setIsOpen] = d(false);
+	const triggerRef = A$1(null);
+	const dropdownRef = A$1(null);
+	const [pos, setPos] = d({
+		top: 0,
+		left: 0,
+		width: 0
+	});
+	const hasPresets = presets.length > 0;
+	const active = presets.find((p) => p.id === activePresetId);
+	const open = q$1(() => {
+		if (!hasPresets) return;
+		const rect = triggerRef.current?.getBoundingClientRect();
+		if (rect) setPos({
+			top: rect.bottom + 4,
+			left: rect.left,
+			width: rect.width
+		});
+		setIsOpen(true);
+	}, [hasPresets]);
+	const close = q$1(() => setIsOpen(false), []);
+	y(() => {
+		if (!isOpen) return;
+		const handler = (e) => {
+			const path = e.composedPath();
+			if (triggerRef.current && path.includes(triggerRef.current) || dropdownRef.current && path.includes(dropdownRef.current)) return;
+			close();
+		};
+		document.addEventListener("mousedown", handler);
+		return () => document.removeEventListener("mousedown", handler);
+	}, [isOpen, close]);
+	const handleSelect = q$1((presetId) => {
+		if (presetId) PaneStore.loadPreset(panelId, presetId);
+		else PaneStore.clearActivePreset(panelId);
+		close();
+	}, [panelId, close]);
+	const handleAdd = q$1(() => {
+		const nextNum = presets.length + 2;
+		PaneStore.savePreset(panelId, `Version ${nextNum}`);
+	}, [panelId, presets.length]);
+	const handleCopy = q$1(() => {
+		const panel = PaneStore.getPanel(panelId);
+		const changed = PaneStore.getChangedValues(panelId);
+		const hasChanges = Object.keys(changed).length > 0;
+		const json = JSON.stringify(hasChanges ? changed : PaneStore.getTunableValues(panelId), null, 2);
+		const where = panel?.source ? ` in ${panel.source}` : "";
+		const text = hasChanges ? `Update the usePane configuration for "${panel?.name ?? panelId}"${where} with these values:\n\n\`\`\`json\n${json}\n\`\`\`\n\nApply these values as the new defaults in the usePane call. Keys are dot-paths into the config; controls not listed are unchanged.` : `The usePane configuration for "${panel?.name ?? panelId}"${where} is at its defaults:\n\n\`\`\`json\n${json}\n\`\`\``;
+		navigator.clipboard.writeText(text).catch(() => {});
+	}, [panelId]);
+	return /* @__PURE__ */ u("div", {
+		class: "up-preset-bar",
+		children: [
+			/* @__PURE__ */ u("button", {
+				ref: triggerRef,
+				class: "up-preset-trigger",
+				onClick: () => isOpen ? close() : open(),
+				children: [/* @__PURE__ */ u("span", { children: active ? active.name : "Default" }), hasPresets && /* @__PURE__ */ u("svg", {
+					class: `up-select-chevron ${isOpen ? "up-select-chevron-open" : ""}`,
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke: "currentColor",
+					"stroke-width": "2.5",
+					"stroke-linecap": "round",
+					"stroke-linejoin": "round",
+					children: /* @__PURE__ */ u("path", { d: "M6 9.5L12 15.5L18 9.5" })
+				})]
+			}),
+			/* @__PURE__ */ u("button", {
+				class: "up-preset-add",
+				onClick: handleAdd,
+				title: "Save preset",
+				children: /* @__PURE__ */ u("svg", {
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke: "currentColor",
+					"stroke-width": "2.5",
+					"stroke-linecap": "round",
+					"stroke-linejoin": "round",
+					children: /* @__PURE__ */ u("path", { d: "M12 5v14M5 12h14" })
+				})
+			}),
+			/* @__PURE__ */ u("button", {
+				class: "up-copy-btn",
+				onClick: handleCopy,
+				title: "Copy for AI",
+				children: /* @__PURE__ */ u("svg", {
+					viewBox: "0 0 24 24",
+					fill: "none",
+					stroke: "currentColor",
+					"stroke-width": "2",
+					"stroke-linecap": "round",
+					"stroke-linejoin": "round",
+					children: [/* @__PURE__ */ u("path", { d: "M8 6C8 4.34 9.34 3 11 3h2c1.66 0 3 1.34 3 3v1H8V6Z" }), /* @__PURE__ */ u("path", { d: "M16 5h1c1.66 0 3 1.34 3 3v10c0 1.66-1.34 3-3 3H7c-1.66 0-3-1.34-3-3V8c0-1.66 1.34-3 3-3h1" })]
+				})
+			}),
+			isOpen && portalContainer && $(/* @__PURE__ */ u("div", {
+				ref: dropdownRef,
+				class: "up-preset-dropdown",
+				style: {
+					top: `${pos.top}px`,
+					left: `${pos.left}px`,
+					minWidth: `${pos.width}px`
+				},
+				children: [/* @__PURE__ */ u("div", {
+					class: `up-preset-item ${!activePresetId ? "up-preset-item-active" : ""}`,
+					onClick: () => handleSelect(null),
+					children: /* @__PURE__ */ u("span", { children: "Default" })
+				}), presets.map((preset) => /* @__PURE__ */ u("div", {
+					class: `up-preset-item ${preset.id === activePresetId ? "up-preset-item-active" : ""}`,
+					onClick: () => handleSelect(preset.id),
+					children: [/* @__PURE__ */ u("span", { children: preset.name }), /* @__PURE__ */ u("button", {
+						class: "up-preset-delete",
+						onClick: (e) => {
+							e.stopPropagation();
+							PaneStore.deletePreset(panelId, preset.id);
+						},
+						title: "Delete",
+						children: /* @__PURE__ */ u("svg", {
+							viewBox: "0 0 24 24",
+							fill: "none",
+							stroke: "currentColor",
+							"stroke-width": "2",
+							"stroke-linecap": "round",
+							"stroke-linejoin": "round",
+							children: /* @__PURE__ */ u("path", { d: "M18 6L6 18M6 6l12 12" })
+						})
+					})]
+				}, preset.id))]
+			}), portalContainer)
+		]
+	});
+}
+//#endregion
+//#region src/ui/useShortcuts.ts
+/** Window-level shortcut handling (dialkit's ShortcutListener, as a hook). */
+function useShortcuts() {
+	const [active, setActive] = d(null);
+	const keys = A$1(/* @__PURE__ */ new Set());
+	const dragging = A$1(false);
+	const lastX = A$1(null);
+	const acc = A$1(0);
+	y(() => {
+		const resetPointer = () => {
+			dragging.current = false;
+			lastX.current = null;
+			acc.current = 0;
+		};
+		const scrubBy = (dx, interaction) => {
+			const target = resolveHeldTarget(keys.current, interaction);
+			if (!target) return false;
+			acc.current += dx;
+			const steps = Math.trunc(acc.current / 4);
+			if (steps !== 0) {
+				acc.current -= steps * 4;
+				applySliderDelta(target, getEffectiveStep(target.control, target.shortcut), steps);
+			}
+			return true;
+		};
+		const onKeyDown = (e) => {
+			if (isInputFocused()) return;
+			const key = e.key.toLowerCase();
+			if (key.startsWith("arrow") && keys.current.size > 0) {
+				const target = resolveHeldTarget(keys.current, "scroll") ?? resolveHeldTarget(keys.current, "drag") ?? resolveHeldTarget(keys.current, "move");
+				if (target) {
+					e.preventDefault();
+					const dir = key === "arrowright" || key === "arrowup" ? 1 : -1;
+					applySliderDelta(target, getEffectiveStep(target.control, target.shortcut), dir);
+					return;
+				}
+			}
+			const held = keys.current.has(key);
+			keys.current.add(key);
+			const target = resolveShortcutTarget(key, getActiveModifier(e));
+			if (target) {
+				setActive({
+					panelId: target.panelId,
+					path: target.path
+				});
+				if (!held && target.control.type === "toggle") {
+					const v = PaneStore.getValue(target.panelId, target.path);
+					PaneStore.updateValue(target.panelId, target.path, !v);
+				}
+			}
+			if (!held) resetPointer();
+		};
+		const onKeyUp = (e) => {
+			keys.current.delete(e.key.toLowerCase());
+			resetPointer();
+			let next = null;
+			for (const k of keys.current) {
+				const t = resolveShortcutTarget(k, getActiveModifier(e));
+				if (t) {
+					next = {
+						panelId: t.panelId,
+						path: t.path
+					};
+					break;
+				}
+			}
+			setActive(next);
+		};
+		const onWheel = (e) => {
+			if (isInputFocused()) return;
+			const modifier = getActiveModifier(e);
+			for (const key of keys.current) {
+				const t = resolveShortcutTarget(key, modifier);
+				if (!t || t.control.type !== "slider" || (t.shortcut.interaction ?? "scroll") !== "scroll") continue;
+				e.preventDefault();
+				applySliderDelta(t, getEffectiveStep(t.control, t.shortcut), e.deltaY > 0 ? -1 : 1);
+				return;
+			}
+			const [t] = resolveScrollOnlyTargets();
+			if (t) {
+				e.preventDefault();
+				applySliderDelta(t, getEffectiveStep(t.control, t.shortcut), e.deltaY > 0 ? -1 : 1);
+			}
+		};
+		const onMouseDown = (e) => {
+			if (isInputFocused() || keys.current.size === 0) return;
+			if (resolveHeldTarget(keys.current, "drag")) {
+				dragging.current = true;
+				lastX.current = e.clientX;
+				acc.current = 0;
+				e.preventDefault();
+			}
+		};
+		const onMouseMove = (e) => {
+			if (isInputFocused() || keys.current.size === 0) return;
+			const interaction = dragging.current ? "drag" : "move";
+			if (lastX.current === null) {
+				lastX.current = e.clientX;
+				return;
+			}
+			const dx = e.clientX - lastX.current;
+			lastX.current = e.clientX;
+			if (!scrubBy(dx, interaction)) acc.current = 0;
+		};
+		const onBlur = () => {
+			keys.current.clear();
+			resetPointer();
+			setActive(null);
+		};
+		window.addEventListener("keydown", onKeyDown);
+		window.addEventListener("keyup", onKeyUp);
+		window.addEventListener("wheel", onWheel, { passive: false });
+		window.addEventListener("mousedown", onMouseDown);
+		window.addEventListener("mouseup", resetPointer);
+		window.addEventListener("mousemove", onMouseMove);
+		window.addEventListener("blur", onBlur);
+		return () => {
+			window.removeEventListener("keydown", onKeyDown);
+			window.removeEventListener("keyup", onKeyUp);
+			window.removeEventListener("wheel", onWheel);
+			window.removeEventListener("mousedown", onMouseDown);
+			window.removeEventListener("mouseup", resetPointer);
+			window.removeEventListener("mousemove", onMouseMove);
+			window.removeEventListener("blur", onBlur);
+		};
+	}, []);
+	return active;
+}
+//#endregion
 //#region src/ui/App.tsx
 const LS_KEY = "uipane-widget";
+const LS_LAYOUT_KEY = "uipane-layout";
 const LS_COLLAPSED_KEY = "uipane-collapsed";
 function loadLS(key) {
 	try {
@@ -3056,57 +10155,113 @@ function saveLS(key, value) {
 		localStorage.setItem(key, JSON.stringify(value));
 	} catch {}
 }
-function SettingsIcon() {
+function TabsIcon() {
 	return /* @__PURE__ */ u("svg", {
-		viewBox: "0 0 16 16",
+		viewBox: "0 0 24 24",
 		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "2",
+		"stroke-linecap": "round",
+		"stroke-linejoin": "round",
+		children: [/* @__PURE__ */ u("path", { d: "M3 9h18M3 9V6a2 2 0 0 1 2-2h4l2 5" }), /* @__PURE__ */ u("rect", {
+			x: "3",
+			y: "4",
+			width: "18",
+			height: "16",
+			rx: "2"
+		})]
+	});
+}
+function StackIcon() {
+	return /* @__PURE__ */ u("svg", {
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-width": "2",
+		"stroke-linecap": "round",
+		"stroke-linejoin": "round",
+		children: [/* @__PURE__ */ u("rect", {
+			x: "3",
+			y: "3",
+			width: "18",
+			height: "7",
+			rx: "2"
+		}), /* @__PURE__ */ u("rect", {
+			x: "3",
+			y: "14",
+			width: "18",
+			height: "7",
+			rx: "2"
+		})]
+	});
+}
+/** Tuning rows whose knobs line up into an arrow pointing into the screen; drawn for the left edge. */
+function KnobArrowIcon() {
+	return /* @__PURE__ */ u("svg", {
+		class: "up-knob-arrow",
+		viewBox: "0 0 24 24",
+		fill: "none",
+		stroke: "currentColor",
+		"stroke-linecap": "round",
 		children: [
 			/* @__PURE__ */ u("path", {
-				opacity: "0.5",
-				d: "M6.85 11.75C6.79 11.99 6.75 12.24 6.75 12.5s.04.51.1.75H2a.75.75 0 010-1.5h4.85zM14 11.75a.75.75 0 010 1.5h-1.35c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14zM3.1 7.25C3.04 7.49 3 7.74 3 8s.04.51.1.75H2a.75.75 0 010-1.5h1.1zM14 7.25a.75.75 0 010 1.5H8.9c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14zM7.6 2.75c-.06.24-.1.49-.1.75s.04.51.1.75H2a.75.75 0 010-1.5h5.6zM14 2.75a.75.75 0 010 1.5h-.6c.06-.24.1-.49.1-.75s-.04-.51-.1-.75H14z",
-				fill: "currentColor"
+				d: "M3 5h18M3 12h18M3 19h18",
+				"stroke-width": "1.6",
+				opacity: "0.25"
 			}),
 			/* @__PURE__ */ u("circle", {
-				cx: "6",
-				cy: "8",
-				r: "1",
+				class: "up-knob-arrow-k up-knob-arrow-k1",
+				cx: "9",
+				cy: "5",
+				r: "2.6",
 				fill: "currentColor",
-				stroke: "currentColor",
-				"stroke-width": "1.25"
+				stroke: "none"
 			}),
 			/* @__PURE__ */ u("circle", {
-				cx: "10.5",
-				cy: "3.5",
-				r: "1",
+				class: "up-knob-arrow-k2",
+				cx: "15",
+				cy: "12",
+				r: "2.6",
 				fill: "currentColor",
-				stroke: "currentColor",
-				"stroke-width": "1.25"
+				stroke: "none"
 			}),
 			/* @__PURE__ */ u("circle", {
-				cx: "9.75",
-				cy: "12.5",
-				r: "1",
+				class: "up-knob-arrow-k up-knob-arrow-k3",
+				cx: "9",
+				cy: "19",
+				r: "2.6",
 				fill: "currentColor",
-				stroke: "currentColor",
-				"stroke-width": "1.25"
+				stroke: "none"
 			})
 		]
 	});
 }
-function App({ portalContainer, childrenSlot }) {
+function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }) {
 	const adoptSlot = q$1((el) => {
 		if (el && childrenSlot && childrenSlot.parentNode !== el) el.appendChild(childrenSlot);
 	}, [childrenSlot]);
 	const shellRef = A$1(null);
+	const activeShortcut = useShortcuts();
 	const [panels, setPanels] = d([]);
 	const [values, setValues] = d({});
-	const [activeTab, setActiveTab] = d(0);
+	const [activeTabId, setActiveTabId] = d(null);
 	const savedShell = loadLS(LS_KEY);
 	const savedCollapsed = loadLS(LS_COLLAPSED_KEY);
 	const [corner, setCorner] = d(savedShell?.corner ?? "bottom-right");
 	const [width, setWidth] = d(savedShell?.width ?? 320);
 	const [height, setHeight] = d(savedShell?.height ?? 420);
 	const [collapsed, setCollapsed] = d(savedCollapsed);
+	const [docking, setDocking] = d(false);
+	const [layout, setLayout] = d(() => loadLS(LS_LAYOUT_KEY) ?? defaultLayout);
+	const [, setViewportTick] = d(0);
+	y(() => {
+		const onResize = () => setViewportTick((n) => n + 1);
+		window.addEventListener("resize", onResize);
+		return () => window.removeEventListener("resize", onResize);
+	}, []);
+	const fitted = fitToViewport(width, height);
+	const shellW = fitted.width;
+	const shellH = fitted.height;
 	y(() => {
 		const update = () => {
 			const p = PaneStore.getPanels();
@@ -3141,9 +10296,18 @@ function App({ portalContainer, childrenSlot }) {
 	]);
 	y(() => {
 		if (collapsed) saveLS(LS_COLLAPSED_KEY, collapsed);
-		else localStorage.removeItem(LS_COLLAPSED_KEY);
+		else try {
+			localStorage.removeItem(LS_COLLAPSED_KEY);
+		} catch {}
 	}, [collapsed]);
-	const pos = collapsed ? getCollapsedPosition(collapsed.corner, collapsed.orientation) : calculatePosition(corner, width, height);
+	y(() => {
+		saveLS(LS_LAYOUT_KEY, layout);
+	}, [layout]);
+	const pos = calculatePosition(corner, shellW, shellH);
+	const currentPanel = panels.find((p) => p.id === activeTabId) ?? panels[0] ?? null;
+	y(() => {
+		if (currentPanel) PaneStore.setActiveTab(currentPanel.name);
+	}, [currentPanel?.name]);
 	const handleDrag = q$1((e) => {
 		if (e.target.closest("button")) return;
 		e.preventDefault();
@@ -3167,25 +10331,28 @@ function App({ portalContainer, childrenSlot }) {
 				const cx = initX + (lastMX - initMX);
 				const cy = initY + (lastMY - initMY);
 				shell.style.transform = `translate3d(${cx}px, ${cy}px, 0)`;
-				const r = cx + width;
-				const b = cy + height;
+				const r = cx + shellW;
+				const b = cy + shellH;
 				const outL = Math.max(0, -cx);
 				const outR = Math.max(0, r - window.innerWidth);
 				const outT = Math.max(0, -cy);
 				const outB = Math.max(0, b - window.innerHeight);
-				const hOut = Math.min(width, outL + outR);
-				const vOut = Math.min(height, outT + outB);
-				if (hOut * height + vOut * width - hOut * vOut > width * height * .35) {
-					const wcx = cx + width / 2;
-					const wcy = cy + height / 2;
+				const hOut = Math.min(shellW, outL + outR);
+				const vOut = Math.min(shellH, outT + outB);
+				if (hOut * shellH + vOut * shellW - hOut * vOut > shellW * shellH * .35) {
+					const wcx = cx + shellW / 2;
+					const wcy = cy + shellH / 2;
 					const scx = window.innerWidth / 2;
 					const scy = window.innerHeight / 2;
 					const tCorner = wcx < scx ? wcy < scy ? "top-left" : "bottom-left" : wcy < scy ? "top-right" : "bottom-right";
 					const orientation = Math.max(outL, outR) > Math.max(outT, outB) ? "horizontal" : "vertical";
-					setCorner(tCorner);
+					const dock = dockOnEdge(getCollapsedEdge(tCorner, orientation), lastMX, lastMY);
+					setCorner(dock.corner);
+					setDocking(true);
 					setCollapsed({
-						corner: tCorner,
-						orientation
+						corner: dock.corner,
+						orientation,
+						anchor: dock.anchor
 					});
 					cleanup();
 				}
@@ -3201,7 +10368,7 @@ function App({ portalContainer, childrenSlot }) {
 				return;
 			}
 			const newCorner = getBestCorner(lastMX, lastMY, initMX, initMY);
-			const snapped = calculatePosition(newCorner, width, height);
+			const snapped = calculatePosition(newCorner, shellW, shellH);
 			shell.style.transition = "transform 0.25s cubic-bezier(0, 0, 0.2, 1)";
 			shell.style.transform = `translate3d(${snapped.x}px, ${snapped.y}px, 0)`;
 			const onEnd = () => {
@@ -3221,48 +10388,92 @@ function App({ portalContainer, childrenSlot }) {
 	}, [
 		pos.x,
 		pos.y,
-		width,
-		height
+		shellW,
+		shellH
 	]);
-	const handleCollapsedDrag = q$1((e) => {
+	const collapsedDragged = A$1(false);
+	const [dockTarget, setDockTarget] = d(null);
+	const expand = q$1((to) => {
 		if (!collapsed) return;
+		setCollapsed(null);
+		setCorner(to ?? collapsed.corner);
+	}, [collapsed]);
+	const handleCollapsedDrag = q$1((e) => {
+		if (!collapsed || e.button !== 0) return;
 		e.preventDefault();
+		const el = e.currentTarget;
+		collapsedDragged.current = false;
 		const initMX = e.clientX;
 		const initMY = e.clientY;
-		const threshold = 50;
+		const rect = el.getBoundingClientRect();
+		const grabX = initMX - rect.left;
+		const grabY = initMY - rect.top;
+		let lastX = initMX;
+		let lastY = initMY;
+		const setEdgeClass = (edge) => {
+			el.classList.remove("up-collapsed-left", "up-collapsed-right", "up-collapsed-top", "up-collapsed-bottom");
+			el.classList.add(`up-collapsed-${edge}`);
+		};
 		const onMove = (ev) => {
-			const dx = ev.clientX - initMX;
-			const dy = ev.clientY - initMY;
-			let expand = false;
-			if (collapsed.orientation === "horizontal") {
-				if (collapsed.corner.endsWith("left") && dx > threshold) expand = true;
-				if (collapsed.corner.endsWith("right") && dx < -threshold) expand = true;
-			} else {
-				if (collapsed.corner.startsWith("top") && dy > threshold) expand = true;
-				if (collapsed.corner.startsWith("bottom") && dy < -threshold) expand = true;
+			lastX = ev.clientX;
+			lastY = ev.clientY;
+			if (!collapsedDragged.current) {
+				if (Math.hypot(lastX - initMX, lastY - initMY) <= 4) return;
+				collapsedDragged.current = true;
+				el.classList.add("up-collapsed-dragging");
 			}
-			if (expand) {
-				setCollapsed(null);
-				setCorner(collapsed.corner);
-				done();
+			const expanding = isInExpandZone(lastX, lastY);
+			el.classList.toggle("up-collapsed-will-expand", expanding);
+			const dock = expanding ? null : collapsedFromPoint(lastX, lastY);
+			const r = dock?.rect;
+			const pulled = r && Math.hypot(r.x + r.width / 2 - lastX, r.y + r.height / 2 - lastY) < 90;
+			setDockTarget(dock ? `${dock.edge}-${dock.anchor}` : "");
+			setEdgeClass(pulled ? dock.edge : getCollapsedEdge(collapsed.corner, collapsed.orientation));
+			if (pulled) {
+				el.style.left = `${r.x}px`;
+				el.style.top = `${r.y}px`;
+				el.style.width = `${r.width}px`;
+				el.style.height = `${r.height}px`;
+			} else {
+				el.style.left = `${lastX - grabX}px`;
+				el.style.top = `${lastY - grabY}px`;
+				el.style.width = `${rect.width}px`;
+				el.style.height = `${rect.height}px`;
 			}
 		};
-		const onUp = () => done();
-		const done = () => {
+		const onUp = () => {
 			document.removeEventListener("pointermove", onMove);
 			document.removeEventListener("pointerup", onUp);
+			if (!collapsedDragged.current) return;
+			el.classList.remove("up-collapsed-dragging", "up-collapsed-will-expand");
+			setDockTarget(null);
+			if (isInExpandZone(lastX, lastY)) {
+				expand(cornerFromPoint(lastX, lastY));
+				return;
+			}
+			const next = collapsedFromPoint(lastX, lastY);
+			el.style.left = `${next.rect.x}px`;
+			el.style.top = `${next.rect.y}px`;
+			el.style.width = `${next.rect.width}px`;
+			el.style.height = `${next.rect.height}px`;
+			setEdgeClass(next.edge);
+			setCollapsed({
+				corner: next.corner,
+				orientation: next.orientation,
+				anchor: next.anchor
+			});
 		};
 		document.addEventListener("pointermove", onMove);
 		document.addEventListener("pointerup", onUp);
-	}, [collapsed]);
+	}, [collapsed, expand]);
 	const handleResize = q$1((handle, e) => {
 		e.preventDefault();
 		e.stopPropagation();
 		const initMX = e.clientX;
 		const initMY = e.clientY;
-		const initW = width;
-		const initH = height;
-		const initPos = calculatePosition(corner, width, height);
+		const initW = shellW;
+		const initH = shellH;
+		const initPos = calculatePosition(corner, shellW, shellH);
 		const shell = shellRef.current;
 		if (!shell) return;
 		shell.classList.add("up-shell-dragging");
@@ -3282,8 +10493,8 @@ function App({ portalContainer, childrenSlot }) {
 		document.addEventListener("pointermove", onMove);
 		document.addEventListener("pointerup", onUp);
 	}, [
-		width,
-		height,
+		shellW,
+		shellH,
 		corner
 	]);
 	const resizeHandles = (() => {
@@ -3298,54 +10509,101 @@ function App({ portalContainer, childrenSlot }) {
 	})();
 	if (panels.length === 0) return null;
 	if (collapsed) {
-		const cPos = getCollapsedPosition(collapsed.corner, collapsed.orientation);
-		return /* @__PURE__ */ u("div", {
-			class: "up-collapsed",
-			style: { transform: `translate3d(${cPos.x}px, ${cPos.y}px, 0)` },
+		const rect = getCollapsedPosition(collapsed.corner, collapsed.orientation, collapsed.anchor);
+		const edge = getCollapsedEdge(collapsed.corner, collapsed.orientation);
+		const title = panels.length === 1 ? panels[0].name : "uipane";
+		return /* @__PURE__ */ u(k$1, { children: [dockTarget !== null && allDocks().map((d) => /* @__PURE__ */ u("i", {
+			class: `up-dock-mark up-dock-mark-${d.edge} ${dockTarget === `${d.edge}-${d.anchor}` ? "up-dock-mark-on" : ""}`,
+			style: {
+				left: `${d.rect.x}px`,
+				top: `${d.rect.y}px`,
+				width: `${d.rect.width}px`,
+				height: `${d.rect.height}px`
+			}
+		}, `${d.edge}-${d.anchor}`)), /* @__PURE__ */ u("button", {
+			type: "button",
+			class: `up-collapsed up-collapsed-${edge} ${docking ? "up-collapsed-enter" : ""}`,
+			onAnimationEnd: () => setDocking(false),
+			style: {
+				left: `${rect.x}px`,
+				top: `${rect.y}px`,
+				width: `${rect.width}px`,
+				height: `${rect.height}px`
+			},
+			"aria-label": `Open ${title}`,
+			title: `Open ${title}`,
 			onPointerDown: handleCollapsedDrag,
-			children: /* @__PURE__ */ u(SettingsIcon, {})
-		});
+			onClick: () => {
+				if (collapsedDragged.current) return;
+				expand();
+			},
+			children: /* @__PURE__ */ u(KnobArrowIcon, {})
+		})] });
 	}
-	const currentPanel = panels[activeTab] ?? panels[0];
-	const currentValues = currentPanel ? values[currentPanel.id] ?? {} : {};
-	y(() => {
-		if (currentPanel) PaneStore.setActiveTab(currentPanel.name);
-	}, [currentPanel?.name]);
+	const stacked = layout === "stack" && panels.length > 1;
+	const renderPanel = (panel) => /* @__PURE__ */ u(Panel, {
+		panel,
+		values: values[panel.id] ?? {},
+		portalContainer,
+		activeShortcutPath: activeShortcut?.panelId === panel.id ? activeShortcut.path : null
+	});
 	return /* @__PURE__ */ u("div", {
 		ref: shellRef,
 		class: "up-shell",
 		style: {
-			width: `${width}px`,
-			height: `${height}px`,
+			width: `${shellW}px`,
+			height: `${shellH}px`,
 			transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`
 		},
 		children: [
 			/* @__PURE__ */ u("div", {
 				class: "up-header",
 				onPointerDown: handleDrag,
-				children: /* @__PURE__ */ u("div", {
+				children: [/* @__PURE__ */ u("div", {
 					class: "up-header-left",
 					children: /* @__PURE__ */ u("span", {
 						class: "up-header-title",
 						children: panels.length === 1 ? currentPanel?.name ?? "uipane" : "uipane"
 					})
-				})
+				}), panels.length > 1 && /* @__PURE__ */ u("div", {
+					class: "up-header-actions",
+					children: /* @__PURE__ */ u("button", {
+						type: "button",
+						class: "up-header-btn",
+						"aria-label": stacked ? "Show panels as tabs" : "Show all panels on one page",
+						title: stacked ? "Tabs" : "Single page",
+						onClick: () => setLayout(stacked ? "tabs" : "stack"),
+						children: stacked ? /* @__PURE__ */ u(TabsIcon, {}) : /* @__PURE__ */ u(StackIcon, {})
+					})
+				})]
 			}),
-			panels.length > 1 && /* @__PURE__ */ u("div", {
+			!stacked && panels.length > 1 && /* @__PURE__ */ u("div", {
 				class: "up-tabs",
-				children: panels.map((panel, i) => /* @__PURE__ */ u("button", {
-					class: `up-tab ${i === activeTab ? "up-tab-active" : ""}`,
-					onClick: () => setActiveTab(i),
+				children: panels.map((panel) => /* @__PURE__ */ u("button", {
+					class: `up-tab ${panel.id === currentPanel?.id ? "up-tab-active" : ""}`,
+					onClick: () => setActiveTabId(panel.id),
 					children: panel.name
 				}, panel.id))
 			}),
+			!stacked && currentPanel && /* @__PURE__ */ u(PresetBar, {
+				panelId: currentPanel.id,
+				presets: PaneStore.getPresets(currentPanel.id),
+				activePresetId: PaneStore.getActivePresetId(currentPanel.id),
+				portalContainer
+			}),
 			/* @__PURE__ */ u("div", {
-				class: "up-content",
-				children: [/* @__PURE__ */ u("div", { ref: adoptSlot }), currentPanel && /* @__PURE__ */ u(Panel, {
-					panel: currentPanel,
-					values: currentValues,
-					portalContainer
-				})]
+				class: `up-content ${stacked ? "up-content-stacked" : ""}`,
+				children: [/* @__PURE__ */ u("div", { ref: adoptSlot }), stacked ? panels.map((panel) => /* @__PURE__ */ u(Folder, {
+					title: panel.name,
+					variant: "section",
+					toolbar: /* @__PURE__ */ u(PresetBar, {
+						panelId: panel.id,
+						presets: PaneStore.getPresets(panel.id),
+						activePresetId: PaneStore.getActivePresetId(panel.id),
+						portalContainer
+					}),
+					children: renderPanel(panel)
+				}, panel.id)) : currentPanel && renderPanel(currentPanel)]
 			}),
 			resizeHandles.map((h) => /* @__PURE__ */ u("div", {
 				class: `up-resize up-resize-${h}`,
@@ -3356,54 +10614,67 @@ function App({ portalContainer, childrenSlot }) {
 }
 //#endregion
 //#region src/mount.ts
-let mounted = false;
-let cleanup = null;
+let refCount = 0;
+let unmount = null;
 let childrenSlotEl = null;
 function getChildrenSlot() {
 	return childrenSlotEl;
 }
-function initPane() {
-	if (mounted && cleanup) return cleanup;
+function initPane(options = {}) {
+	refCount++;
+	if (!unmount) unmount = mount(options);
+	let released = false;
+	return () => {
+		if (released) return;
+		released = true;
+		refCount--;
+		if (refCount === 0 && unmount) {
+			unmount();
+			unmount = null;
+		}
+	};
+}
+function mount(options) {
 	const host = document.createElement("div");
 	host.id = "uipane-root";
 	host.style.cssText = "position:fixed;top:0;left:0;width:0;height:0;overflow:visible;z-index:2147483645;pointer-events:none;";
 	document.documentElement.appendChild(host);
 	const shadow = host.attachShadow({ mode: "open" });
 	const style = document.createElement("style");
-	style.textContent = STYLES;
+	style.textContent = STYLES + DIALKIT_STYLES;
 	shadow.appendChild(style);
-	const portalContainer = document.createElement("div");
-	portalContainer.className = "up-portal";
-	shadow.appendChild(portalContainer);
 	childrenSlotEl = document.createElement("div");
 	childrenSlotEl.className = "up-children";
 	const container = document.createElement("div");
 	container.className = "up-root";
 	container.style.cssText = "pointer-events:auto;";
 	shadow.appendChild(container);
+	const portalContainer = document.createElement("div");
+	portalContainer.className = "up-portal";
+	shadow.appendChild(portalContainer);
 	J$1(_$1(App, {
 		portalContainer,
-		childrenSlot: childrenSlotEl
+		childrenSlot: childrenSlotEl,
+		defaultLayout: options.layout
 	}), container);
-	mounted = true;
-	cleanup = () => {
+	return () => {
 		J$1(null, container);
 		host.remove();
-		mounted = false;
-		cleanup = null;
 		childrenSlotEl = null;
 	};
-	return cleanup;
 }
 //#endregion
 //#region src/react/PaneRoot.ts
+const IS_DEV = typeof process !== "undefined" && process.env?.NODE_ENV ? process.env.NODE_ENV !== "production" : import.meta.env?.MODE ? import.meta.env.MODE !== "production" : true;
 function PaneRoot(props) {
 	const [slot, setSlot] = useState(null);
+	const enabled = props.productionEnabled ?? IS_DEV;
 	useEffect(() => {
-		const cleanup = initPane();
+		if (!enabled) return;
+		const cleanup = initPane({ layout: props.layout });
 		setSlot(getChildrenSlot());
 		return cleanup;
-	}, []);
+	}, [enabled]);
 	if (props.children && slot) return createPortal(props.children, slot);
 	return null;
 }
@@ -3421,4 +10692,4 @@ function useActiveTab() {
 	return useSyncExternalStore((cb) => PaneStore.subscribeActiveTab(cb), () => PaneStore.getActiveTab(), () => PaneStore.getActiveTab());
 }
 //#endregion
-export { PaneRoot, PaneSlot, PaneStore, initPane, useActiveTab, usePane };
+export { PaneRoot, PaneSlot, PaneStore, initPane, useActiveTab, usePane, usePaneController };

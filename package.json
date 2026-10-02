@@ -4,7 +4,7 @@
   "description": "Dev panel library — floating, dockable control panels with drag, snap, collapse, and polished controls.",
   "license": "MIT",
   "type": "module",
-  "files": ["dist"],
+  "files": ["dist", "skills"],
   "main": "./dist/index.mjs",
   "module": "./dist/index.mjs",
   "types": "./dist/index.d.mts",
@@ -14,6 +14,11 @@
       "import": "./dist/index.mjs",
       "default": "./dist/index.mjs"
     },
+    "./vite": {
+      "types": "./dist/vite.d.mts",
+      "import": "./dist/vite.mjs",
+      "default": "./dist/vite.mjs"
+    },
     "./package.json": "./package.json"
   },
   "scripts": {
@@ -21,6 +26,7 @@
     "prepare": "bun run build",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "typecheck": "tsc --noEmit",
     "check": "vp check"
   },
   "peerDependencies": {

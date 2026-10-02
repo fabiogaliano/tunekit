@@ -1,0 +1,856 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>uipane · color picker explorations</title>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  :root {
+    --bg: #050505; --panel: #0d0d0d; --surface: #161616; --surface-2: #1d1d1d; --border: #232323;
+    --t1: #fff; --t2: #d4d4d4; --t3: #a3a3a3; --t4: #6b6b6b; --accent: #8b7bff;
+    --checker: repeating-conic-gradient(#2a2a2a 0 25%, #1a1a1a 0 50%) 0 0 / 10px 10px;
+  }
+  body { background: var(--bg); color: var(--t2); font: 13px/1.4 system-ui, -apple-system, sans-serif; padding: 40px; -webkit-font-smoothing: antialiased; }
+  h1 { font-size: 18px; color: var(--t1); font-weight: 600; margin-bottom: 6px; }
+  h3 { font-size: 13px; color: var(--t1); font-weight: 600; margin: 0 0 8px; }
+  p.lead { color: var(--t3); max-width: 860px; margin-bottom: 8px; }
+  p.lead b { color: var(--t1); font-weight: 600; }
+  kbd { font: 11px ui-monospace, monospace; background: var(--surface-2); border: 1px solid var(--border); border-radius: 4px; padding: 0 4px; color: var(--t2); }
+  .cols { display: grid; grid-template-columns: repeat(3, 300px); gap: 28px; margin-top: 28px; align-items: start; }
+  .col > h2 { font-size: 14px; color: var(--t1); font-weight: 600; margin-bottom: 2px; }
+  .col > p { font-size: 12px; color: var(--t4); min-height: 52px; margin-bottom: 12px; }
+  .out { margin-top: 10px; font: 11px/1.5 ui-monospace, monospace; color: var(--t3); word-break: break-all; background: #0a0a0a; border: 1px solid var(--border); border-radius: 8px; padding: 8px; cursor: copy; }
+  .out:hover { color: var(--t1); }
+
+  /* ------------------------------------------------ picker */
+  .cp { width: 300px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 20px 50px rgba(0,0,0,.5); padding: 10px; display: flex; flex-direction: column; gap: 10px; user-select: none; }
+  .cp.compact { width: 248px; }
+  .tabs { display: flex; gap: 2px; background: var(--surface); border-radius: 9px; padding: 2px; }
+  .tab { flex: 1; height: 26px; border: 0; border-radius: 7px; background: none; color: var(--t4); font: 500 12px system-ui; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 5px; }
+  .tab:hover { color: var(--t2); }
+  .tab.on { background: var(--surface-2); color: var(--t1); box-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .tab svg { width: 14px; height: 14px; }
+
+  .area { position: relative; height: 150px; border-radius: 9px; cursor: crosshair; touch-action: none; }
+  .thumb { position: absolute; width: 16px; height: 16px; border-radius: 50%; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.4), 0 2px 6px rgba(0,0,0,.4); transform: translate(-50%, -50%); pointer-events: none; }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .sliders { flex: 1; display: flex; flex-direction: column; gap: 8px; }
+  .slider { position: relative; height: 12px; border-radius: 6px; cursor: pointer; touch-action: none; }
+  .slider .thumb { top: 50%; width: 14px; height: 14px; }
+  .hue { background: linear-gradient(to right, #f00, #ff0, #0f0, #0ff, #00f, #f0f, #f00); }
+  .alpha { background: var(--checker); }
+  .alpha > i { position: absolute; inset: 0; border-radius: 6px; }
+  .swatch { width: 30px; height: 30px; border-radius: 8px; background: var(--checker); position: relative; overflow: hidden; flex-shrink: 0; box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); }
+  .swatch > i { position: absolute; inset: 0; }
+  .icon-btn { width: 30px; height: 30px; border-radius: 8px; border: 0; background: var(--surface); color: var(--t3); cursor: pointer; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
+  .icon-btn:hover { color: var(--t1); background: var(--surface-2); }
+  .icon-btn svg { width: 15px; height: 15px; }
+
+  .fields { display: flex; gap: 3px; }
+  .fields .field:nth-child(3) { flex: 1.25; }
+  .fields .field:last-child { flex: 1.2; }
+  .fmt { height: 28px; padding: 0 5px; border: 0; border-radius: 7px; background: var(--surface); color: var(--t3); font: 600 10px system-ui; letter-spacing: .04em; cursor: pointer; display: flex; align-items: center; gap: 3px; flex-shrink: 0; }
+  .fmt:hover { color: var(--t1); }
+  /* Narrow popover: the field letters already say which format is on, so the toggle shrinks to its icon. */
+  .cp.compact .fmt .name { display: none; }
+  .cp.compact .fmt svg { width: 12px; height: 12px; }
+  .fmt svg { width: 10px; height: 10px; }
+  .field { flex: 1; min-width: 0; height: 28px; display: flex; align-items: center; background: var(--surface); border-radius: 7px; padding: 0 0 0 6px; cursor: ew-resize; box-shadow: inset 0 0 0 1px transparent; transition: box-shadow .12s, background .12s; }
+  .field:hover { background: var(--surface-2); }
+  .field.text { cursor: text; flex: 2.2; }
+  /* No selectable text while scrubbing: a drag over selected text is what wakes PopClip and similar tools. */
+  .field, .field input { -webkit-user-select: none; user-select: none; }
+  .field.text input, .field.editing input { -webkit-user-select: text; user-select: text; }
+  .vcursor { position: fixed; z-index: 10; width: 24px; height: 24px; margin: -12px 0 0 -12px; pointer-events: none; display: none; filter: drop-shadow(0 1px 1px rgba(0,0,0,.6)); }
+  .vcursor.on { display: block; }
+  .dots { display: grid; grid-template-columns: repeat(9, 1fr); gap: 6px 0; justify-items: center; }
+  .dot { width: 24px; height: 24px; border-radius: 50%; border: 0; padding: 0; cursor: pointer; background: var(--c); transition: transform .12s, box-shadow .12s; }
+  .dot:hover { transform: scale(1.12); }
+  .dot.on { box-shadow: inset 0 0 0 2px var(--c), inset 0 0 0 4px var(--panel); }
+  .dot.light { box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); }
+  .dot.light.on { box-shadow: inset 0 0 0 2px var(--c), inset 0 0 0 4px var(--panel), 0 0 0 1px rgba(255,255,255,.2); }
+  .dots-label { font: 600 10px system-ui; color: var(--t4); letter-spacing: .04em; text-transform: uppercase; margin: 8px 0 6px; }
+  .dots-label:first-child { margin-top: 0; }
+  .field.scrubbing { box-shadow: inset 0 0 0 1px var(--accent); background: #1d1a33; }
+  .field:focus-within { box-shadow: inset 0 0 0 1px #3a3a3a; }
+  .field span { font: 600 10px system-ui; color: var(--t4); margin-right: 2px; flex-shrink: 0; }
+  .field.scrubbing span { color: var(--accent); }
+  .field input { width: 100%; min-width: 0; background: none; border: 0; outline: 0; color: var(--t1); font: 11px ui-monospace, monospace; letter-spacing: -.02em; padding: 0 5px 0 0; text-align: right; cursor: inherit; pointer-events: none; }
+  .field.text input, .field.editing input { pointer-events: auto; cursor: text; text-align: left; }
+
+  .gbar-wrap { padding: 0 7px; }
+  .gbar { position: relative; height: 26px; border-radius: 7px; background: var(--checker); cursor: copy; touch-action: none; }
+  .gbar > i { position: absolute; inset: 0; border-radius: 7px; }
+  .stop { position: absolute; top: 50%; width: 14px; height: 30px; transform: translate(-50%, -50%); border-radius: 5px; border: 2px solid #fff; box-shadow: 0 0 0 1px rgba(0,0,0,.5), 0 2px 6px rgba(0,0,0,.5); cursor: grab; }
+  .stop.sel { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .stop.removing { opacity: .3; }
+  .seg { display: flex; background: var(--surface); border-radius: 7px; padding: 2px; }
+  .seg button { height: 24px; padding: 0 8px; border: 0; border-radius: 5px; background: none; color: var(--t4); font: 500 11px system-ui; cursor: pointer; }
+  .seg button.on { background: var(--surface-2); color: var(--t1); }
+  .hint { font-size: 10.5px; color: var(--t4); }
+
+  .sect { border-top: 1px solid var(--border); padding-top: 8px; }
+  .sect > summary { list-style: none; display: flex; align-items: center; gap: 6px; cursor: pointer; font: 600 11.5px system-ui; color: var(--t3); padding: 2px 0 6px; }
+  .sect > summary::-webkit-details-marker { display: none; }
+  .sect > summary:hover { color: var(--t1); }
+  .sect > summary .n { color: var(--t4); font-weight: 500; }
+  .sect > summary .jp { color: var(--t4); font-weight: 400; }
+  .sect > summary svg { width: 12px; height: 12px; margin-left: auto; transition: transform .2s; color: var(--t4); }
+  .sect[open] > summary svg { transform: rotate(90deg); }
+  /* The body scrolls, which clips overflow; the padding/negative-margin pair gives the × badge and hover scale room without shifting anything. */
+  .sect .body { padding: 6px; margin: -6px; max-height: 272px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: #333 transparent; }
+  .sect .body.free { overflow: visible; max-height: none; }
+  .sect .body.free { overflow: visible; max-height: none; }
+  .search { width: 100%; height: 26px; background: var(--surface); border: 0; border-radius: 7px; color: var(--t1); padding: 0 8px; font: 12px system-ui; outline: 0; margin-bottom: 6px; }
+
+  .chips { display: grid; grid-template-columns: repeat(8, 1fr); gap: 5px; }
+  .chips.g { grid-template-columns: repeat(4, 1fr); }
+  .chip { position: relative; aspect-ratio: 1; border-radius: 7px; cursor: pointer; background: var(--checker); box-shadow: inset 0 0 0 1px rgba(255,255,255,.08); transition: transform .12s; }
+  .chips.g .chip { aspect-ratio: 1.6; }
+  .chip > i { position: absolute; inset: 0; border-radius: inherit; }
+  .chip:hover { transform: scale(1.08); z-index: 1; }
+  .chip.add { background: none; box-shadow: inset 0 0 0 1px dashed; border: 1px dashed #3a3a3a; color: var(--t4); display: flex; align-items: center; justify-content: center; }
+  .chip.add:hover { color: var(--t1); border-color: var(--t3); }
+  .chip.add svg { width: 12px; height: 12px; }
+  .chip .x { position: absolute; top: -5px; right: -5px; width: 15px; height: 15px; border-radius: 50%; background: #2a2a2a; color: #fff; border: 1px solid #444; cursor: pointer; padding: 0; display: none; align-items: center; justify-content: center; font-size: 10px; line-height: 1; z-index: 2; }
+  .chip:hover .x { display: flex; }
+  .chip .x:hover { background: #c33; border-color: #c33; }
+  .chip .lbl { position: absolute; left: 4px; bottom: 2px; font-size: 9px; font-weight: 600; color: rgba(255,255,255,.92); text-shadow: 0 1px 2px rgba(0,0,0,.6); white-space: nowrap; overflow: hidden; max-width: calc(100% - 6px); pointer-events: none; }
+  .empty { font-size: 11px; color: var(--t4); padding: 2px 0 4px; }
+
+  .combos { display: flex; flex-direction: column; gap: 5px; }
+  .combo { display: flex; align-items: center; gap: 6px; }
+  .combo .no { width: 22px; font: 10px ui-monospace, monospace; color: var(--t4); text-align: right; }
+  .combo .strip { flex: 1; display: flex; height: 22px; border-radius: 6px; overflow: hidden; }
+  .combo .strip i { flex: 1; cursor: pointer; transition: flex .15s; }
+  .combo .strip i:hover { flex: 1.6; }
+  .combo button { height: 22px; border: 0; border-radius: 6px; background: var(--surface); color: var(--t4); cursor: pointer; padding: 0 6px; font-size: 11px; }
+  .combo button:hover { color: var(--t1); }
+
+  .tip { position: fixed; pointer-events: none; z-index: 9; background: #000; border: 1px solid #333; color: #fff; font-size: 11px; padding: 3px 7px; border-radius: 6px; white-space: nowrap; opacity: 0; transition: opacity .1s; }
+
+  .preview-big { height: 64px; border-radius: 10px; background: var(--checker); position: relative; overflow: hidden; }
+  .preview-big > i { position: absolute; inset: 0; }
+  .custom-toggle { display: flex; align-items: center; gap: 6px; background: none; border: 0; color: var(--t3); font: 600 11.5px system-ui; cursor: pointer; padding: 0; }
+  .custom-toggle:hover { color: var(--t1); }
+  .custom-toggle svg { width: 12px; height: 12px; transition: transform .2s; }
+  .custom-toggle.open svg { transform: rotate(90deg); }
+
+  /* ------------------------------------------------ checklist */
+  .pick { margin-top: 44px; max-width: 980px; }
+  .pick h2 { font-size: 15px; color: var(--t1); margin-bottom: 4px; }
+  .pick > p { color: var(--t3); margin-bottom: 14px; }
+  .groups { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .group { background: #0a0a0a; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; }
+  .group label { display: flex; gap: 8px; align-items: flex-start; padding: 4px 0; cursor: pointer; font-size: 12.5px; }
+  .group label small { display: block; color: var(--t4); font-size: 11px; }
+  .group input { accent-color: var(--accent); margin-top: 2px; }
+  #summary { margin-top: 14px; }
+  .sources { margin-top: 30px; color: var(--t4); font-size: 11.5px; max-width: 860px; }
+  .sources a { color: var(--t3); }
+</style>
+</head>
+<body>
+<h1>Color picker — explorations</h1>
+<p class="lead">Three layouts built on the same parts. They all work, and saved colors are shared between them (stored in this browser). Pick a layout, then tick the features you want in the list at the bottom.</p>
+<p class="lead"><b>Scrub fields:</b> press on a number field and drag left/right. The cursor locks in place so it never runs out of room. Hold <kbd>Shift</kbd> for ×10 or <kbd>Alt</kbd> for ×0.1. A click without dragging edits the number as text. <b>Format:</b> the button left of the fields cycles HEX → OKLCH → RGB. <b>Gradient stops:</b> click the bar to add a stop, drag a stop to move it, drag it down off the bar (or press <kbd>Delete</kbd>) to remove it. <b>Saved:</b> <kbd>+</kbd> saves the current color, hover a chip and click × (or right-click it) to remove it.</p>
+
+<div class="cols">
+  <div class="col"><h2>A · Tabs</h2><p>Solid / Gradient / Library tabs, like Untitled UI. Each tab stays short, and the big collections live in Library.</p><div id="A"></div><div class="out" id="A-out" title="Click to copy"></div></div>
+  <div class="col"><h2>B · One sheet</h2><p>A Solid/Gradient switch above the editor, and every collection as a collapsible section below it. dialkit-like: one scroll, no hidden tabs.</p><div id="B"></div><div class="out" id="B-out" title="Click to copy"></div></div>
+  <div class="col"><h2>C · Swatches first</h2><p>HeroUI-like: a narrow popover that opens on swatches (saved and traditional colors). The full editor sits behind "Custom". Icon tabs at the top.</p><div id="C"></div><div class="out" id="C-out" title="Click to copy"></div></div>
+</div>
+
+<section class="pick">
+  <h2>Features — tick what you want</h2>
+  <p>The summary updates as you tick. Paste it back to me, or just say e.g. "A, everything except P3".</p>
+  <div class="groups" id="groups"></div>
+  <div class="out" id="summary" title="Click to copy"></div>
+</section>
+
+<p class="sources">Data: <a href="https://github.com/mattdesl/dictionary-of-colour-combinations">Sanzo Wada, <i>A Dictionary of Color Combinations</i></a> (1933; 159 colors, 348 combinations; data MIT © Matt DesLauriers) · <a href="https://github.com/ghosh/uiGradients">uiGradients</a> (382 gradients, MIT © Indrashish Ghosh). The "和 Japanese gradients" are hand-made from traditional color names (nippon-iro), so there's nothing to license. All three ship as plain data and would add about 25 KB (8 KB gzipped), so they could be tree-shaken or an opt-in import.</p>
+
+<div class="tip" id="tip"></div>
+<svg class="vcursor" id="vcursor" viewBox="0 0 24 24"><path d="M2 12l5-5v3h10V7l5 5-5 5v-3H7v3z" fill="#fff" stroke="#000" stroke-width="1.2" stroke-linejoin="round"/></svg>
+
+<script>
+// ===================================================================== data
+const WADA = {"c":[["Hermosa Pink","#f9c1ce"],["Corinthian Pink","#f8b6ba"],["Cameo Pink","#e0b3b6"],["Fawn","#d1b0a7"],["Light Brown Drab","#b59392"],["Coral Red","#f58e84"],["Fresh Color","#f6917e"],["Grenadine Pink","#f48067"],["Eosine Pink","#f37f94"],["Spinel Red","#f27291"],["Old Rose","#d46d7a"],["Eugenia Red | A","#e2625e"],["Eugenia Red | B","#da525d"],["Raw Sienna","#bb7125"],["Vinaceous Tawny","#c56127"],["Jasper Red","#eb5324"],["Spectrum Red","#e31f26"],["Red Orange","#dd4027"],["Etruscan Red","#c55347"],["Burnt Sienna","#ae5224"],["Ochre Red","#ab544d"],["Scarlet","#cb2f43"],["Carmine","#cc1236"],["Indian Lake","#c53c69"],["Rosolanc Purple","#b73f74"],["Pomegranite Purple","#b71f57"],["Hydrangea Red","#a94151"],["Brick Red","#a84222"],["Carmine Red","#a62c37"],["Pompeian Red","#ab2439"],["Red","#a72144"],["Brown","#7c4226"],["Hay's Russet","#793327"],["Vandyke Red","#82241f"],["Pansy Purple","#7d133a"],["Pale Burnt Lake","#802626"],["Violet Red","#642d5e"],["Vistoris Lake","#6d4145"],["Sulpher Yellow","#f5ecc2"],["Pale Lemon Yellow","#ffefae"],["Naples Yellow","#fbe6a0"],["Ivory Buff","#ebd3a2"],["Seashell Pink","#fdd4bd"],["Light Pinkish Cinnamon","#fcc79b"],["Pinkish Cinnamon","#eeb480"],["Cinnamon Buff","#fdc57e"],["Cream Yellow","#fdbf68"],["Golden Yellow","#f3a257"],["Vinaceous Cinnamon","#eea78c"],["Ochraceous Salmon","#d8a37b"],["Isabella Color","#c5a56e"],["Maple","#c59f6b"],["Olive Buff","#c1c494"],["Ecru","#c2ae93"],["Yellow","#fff200"],["Lemon Yellow","#f8ed43"],["Apricot Yellow","#ffdd00"],["Pyrite Yellow","#cab356"],["Olive Ocher","#d6b43e"],["Yellow Ocher","#e2b540"],["Orange Yellow","#fcb315"],["Yellow Orange","#f99d1b"],["Apricot Orange","#f68c50"],["Orange","#f37420"],["Peach Red","#f15a30"],["English Red","#d96629"],["Cinnamon Rufous","#c27544"],["Orange Rufous","#c16b27"],["Sulphine Yellow","#c19f2c"],["Khaki","#bc892b"],["Citron Yellow","#b2b73e"],["Citrine","#b09f36"],["Buffy Citrine","#96874d"],["Dark Citrine","#8b835b"],["Light Grayish Olive","#848061"],["Krongbergs Green","#84875e"],["Olive","#837e31"],["Orange Citrine","#986f2d"],["Sudan Brown","#a36752"],["Olive Green","#6b7140"],["Light Brownish Olive","#806e4b"],["Deep Grayish Olive","#635a3a"],["Pale Raw Umber","#71502f"],["Sepia","#644b1e"],["Madder Brown","#762c19"],["Mars Brown Tobacco","#653514"],["Vandyke Brown","#4b3317"],["Turquoise Green","#b5decc"],["Glaucous Green","#b4cdc2"],["Dark Greenish Glaucous","#b7c2a9"],["Yellow Green","#afd472"],["Light Green Yellow","#c7d14f"],["Night Green","#87c540"],["Olive Yellow","#a6a159"],["Artemesia Green","#709390"],["Andover Green","#6d7e77"],["Rainette Green","#8fa071"],["Chromium Green","#719470"],["Pistachio Green","#648f7b"],["Sea Green","#00b49b"],["Benzol Green","#00978d"],["Light Porcelain Green","#00908a"],["Green","#489b6e"],["Dull Viridian Green","#009465"],["Oil Green","#819238"],["Diamine Green","#1a7444"],["Cossack Green","#437742"],["Lincoln Green","#555832"],["Blackish Olive","#42533e"],["Deep Slate Olive","#253122"],["Nile Blue","#bce4e5"],["Pale King's Blue","#a7d4e4"],["Light Glaucous Blue","#a5c8d1"],["Salvia Blue","#97acc8"],["Cobalt Green","#96d1aa"],["Calamine BLue","#78cdd0"],["Venice Green","#62c6bf"],["Cerulian Blue","#0093a5"],["Peacock Blue","#00939b"],["Green Blue","#099197"],["Olympic Blue","#5a82b3"],["Blue","#006eb8"],["Antwarp Blue","#007190"],["Helvetia Blue","#005b8d"],["Dark Medici Blue","#547076"],["Dusky Green","#004f46"],["Deep Lyons Blue","#1c4286"],["Violet Blue","#40456a"],["Vandar Poel's Blue","#064f6e"],["Dark Tyrian Blue","#12354e"],["Dull Violet Black","#1e0e3f"],["Deep Indigo","#051230"],["Deep Slate Green","#112f2c"],["Grayish Lavender - A","#b5b1d8"],["Grayish Lavender - B","#c0a9b3"],["Laelia Pink","#ca92a8"],["Lilac","#b984af"],["Eupatorium Purple","#bf5892"],["Light Mauve","#9a72aa"],["Aconite Violet","#a36aa5"],["Dull Blue Violet","#80719e"],["Dark Soft Violet","#66629c"],["Blue Violet","#6450a1"],["Purple Drab","#84565b"],["Deep Violet / Plumbeous","#70727c"],["Veronia Purple","#8c4c62"],["Dark Slate Purple","#704357"],["Taupe Brown","#7a4456"],["Violet Carmine","#713b4c"],["Violet","#4f4086"],["Red Violet","#59256a"],["Cotinga Purple","#501345"],["Dusky Madder Violet","#4e1d4c"],["White","#ffffff"],["Neutral Gray","#b6bfc1"],["Mineral Gray","#a2b0ad"],["Warm Gray","#a1a39a"],["Slate Color","#34454c"],["Black","#111314"]],"k":[[65,117],[61,129],[13,39],[50,150],[106,128],[7,131],[63,88],[66,133],[36,140],[66,73],[41,155],[50,119],[13,145],[9,40],[100,133],[33,111],[12,99],[3,152],[85,92],[115,135],[7,99],[54,126],[45,138],[83,145],[18,110],[47,82],[1,157],[84,131],[75,113],[29,155],[17,39],[49,92],[13,157],[8,154],[4,28],[68,87],[27,150],[105,126],[22,123],[14,70],[73,115],[59,149],[1,139],[101,120],[42,55],[63,158],[18,134],[24,123],[111,121],[41,152],[28,121],[38,158],[61,152],[100,112],[10,153],[134,149],[147,157],[32,99],[8,71],[39,129],[91,151],[54,158],[37,117],[139,141],[68,115],[58,79],[120,129],[4,54],[156,158],[13,107],[29,49],[38,111],[82,96],[87,119],[111,127],[39,156],[12,128],[44,116],[84,119],[38,138],[47,156],[32,152],[52,127],[42,132],[14,122],[13,99],[1,70],[42,121],[61,127],[8,139],[37,67],[5,100],[71,112],[41,125],[32,130],[59,76],[1,18],[84,127],[39,117],[72,140],[2,126],[41,67],[66,152],[28,38],[2,97],[122,130],[56,74],[8,27],[39,108],[31,86],[39,90],[7,158],[42,86],[60,122],[40,64],[2,142],[22,158],[59,86],[112,129],[2,29],[31,49,107],[22,46,100],[5,55,147],[35,59,93],[3,117,127],[41,59,126],[45,98,141],[1,116,138],[56,69,113],[13,28,149],[13,65,118],[38,47,71],[33,71,99],[8,138,150],[38,106,113],[21,103,150],[18,45,98],[47,55,116],[113,131,154],[47,122,157],[63,90,129],[26,68,113],[121,136,156],[24,63,158],[31,70,130],[69,81,105],[9,33,87],[58,60,117],[58,63,132],[42,70,88],[38,61,128],[18,32,112],[8,60,70],[22,54,121],[15,100,131],[58,114,149],[34,58,120],[55,66,92],[69,115,133],[68,82,124],[31,44,123],[10,96,136],[56,87,122],[17,60,149],[2,9,37],[7,40,132],[53,111,128],[55,128,145],[1,39,156],[24,60,150],[35,61,88],[66,122,150],[55,84,87],[1,134,147],[44,52,142],[0,42,115],[35,72,133],[41,112,119],[17,47,126],[45,138,154],[28,149,151],[13,86,131],[144,145,150],[9,41,74],[4,18,39],[32,49,121],[123,134,139],[96,113,114],[55,109,116],[41,65,158],[4,59,121],[46,86,144],[7,40,101],[15,42,120],[9,39,154],[70,111,142],[8,141,154],[19,56,102],[20,80,126],[28,52,97],[7,76,114],[87,114,157],[39,48,107],[24,66,112],[35,48,149],[1,47,66],[78,88,158],[38,119,122],[41,61,113],[45,55,107],[62,93,131],[29,77,113],[48,56,111],[41,78,149],[46,121,137],[15,102,158],[35,49,105],[123,133,144],[15,97,125],[25,49,139],[28,154,158],[59,61,67],[4,49,87],[9,124,147],[22,125,146],[37,46,149],[0,112,117],[28,39,154],[47,109,154],[7,87,114],[2,32,120],[22,44,131],[28,72,127],[45,82,111],[41,61,134],[69,126,143],[28,84,113],[49,151,156],[4,57,88],[6,54,117],[17,39,50,124],[8,19,105,158],[13,41,79,157],[4,14,95,122],[28,104,129,157],[1,27,38,45],[13,56,100,126],[8,69,133,146],[32,53,58,124],[57,64,99,110],[30,54,105,157],[12,13,68,119],[55,62,151,157],[1,38,76,135],[13,57,115,158],[48,63,103,158],[16,60,121,139],[35,44,76,122],[55,119,123,156],[10,48,88,99],[30,39,115,156],[12,41,71,106],[19,44,87,157],[1,17,89,117],[10,56,93,130],[16,41,96,100],[46,61,100,121],[4,13,109,110],[13,35,139,158],[12,38,79,106],[25,114,119,132],[39,63,87,113],[0,34,78,154],[64,73,120,138],[18,53,84,147],[8,42,90,158],[9,24,76,130],[46,58,106,125],[13,48,53,129],[12,107,135,147],[39,100,114,122],[12,51,114,136],[20,35,97,116],[11,56,99,125],[4,19,64,87],[19,60,118,127],[8,57,111,115],[61,83,147,158],[55,91,127,130],[37,39,107,114],[91,99,114,115],[39,44,50,53],[13,87,94,102],[38,46,106,113],[46,54,121,130],[38,49,82,157],[19,61,79,127],[13,55,64,158],[23,48,104,122],[7,46,87,115],[16,41,96,139],[46,53,110,122],[40,64,109,154],[32,46,73,100],[44,56,70,87],[55,100,103,110],[22,133,139,151],[3,21,65,114],[47,62,127,128],[38,44,76,109],[29,46,89,91],[19,61,94,123],[22,54,105,158],[8,32,126,152],[7,38,47,137],[33,103,149,150],[43,53,55,87],[80,108,125,132],[13,56,61,106],[5,38,104,112],[4,38,109,113],[16,27,137,142],[45,70,84,158],[29,120,139,154],[12,40,59,132],[38,64,90,92],[8,13,53,134],[27,62,86,101],[46,134,151,157],[52,110,113,119],[23,130,138,149],[5,21,109,125],[19,55,114,121],[42,76,90,122],[33,61,149,157],[8,32,39,108],[37,135,148,158],[28,60,125,134],[49,65,112,127],[64,99,154,158],[7,106,109,112],[1,46,77,109],[19,41,81,128],[45,126,139,158],[32,110,116,142],[24,87,91,95],[93,99,123,136],[52,106,109,151]]};
+const UIG = [["Omolon",["#091E3A","#2F80ED","#2D9EE0"]],["Farhan",["#9400D3","#4B0082"]],["Purple",["#c84e89","#F15F79"]],["Ibtesam",["#00F5A0","#00D9F5"]],["Radioactive Heat",["#F7941E","#72C6EF","#00A651"]],["The Sky And The Sea",["#F7941E","#004E8F"]],["From Ice To Fire",["#72C6EF","#004E8F"]],["Blue & Orange",["#FD8112","#0085CA"]],["Purple Dream",["#bf5ae0","#a811da"]],["Blu",["#00416A","#E4E5E6"]],["Summer Breeze",["#fbed96","#abecd6"]],["Ver",["#FFE000","#799F0C"]],["Ver Black",["#F7F8F8","#ACBB78"]],["Combi",["#00416A","#799F0C","#FFE000"]],["Anwar",["#334d50","#cbcaa5"]],["Bluelagoo",["#0052D4","#4364F7","#6FB1FC"]],["Lunada",["#5433FF","#20BDFF","#A5FECB"]],["Reaqua",["#799F0C","#ACBB78"]],["Mango",["#ffe259","#ffa751"]],["Bupe",["#00416A","#E4E5E6"]],["Rea",["#FFE000","#799F0C"]],["Windy",["#acb6e5","#86fde8"]],["Royal Blue",["#536976","#292E49"]],["Royal Blue + Petrol",["#BBD2C5","#536976","#292E49"]],["Copper",["#B79891","#94716B"]],["Anamnisar",["#9796f0","#fbc7d4"]],["Petrol",["#BBD2C5","#536976"]],["Sky",["#076585","#fff"]],["Sel",["#00467F","#A5CC82"]],["Afternoon",["#000C40","#607D8B"]],["Skyline",["#1488CC","#2B32B2"]],["DIMIGO",["#ec008c","#fc6767"]],["Purple Love",["#cc2b5e","#753a88"]],["Sexy Blue",["#2193b0","#6dd5ed"]],["Blooker20",["#e65c00","#F9D423"]],["Sea Blue",["#2b5876","#4e4376"]],["Nimvelo",["#314755","#26a0da"]],["Hazel",["#77A1D3","#79CBCA","#E684AE"]],["Noon to Dusk",["#ff6e7f","#bfe9ff"]],["YouTube",["#e52d27","#b31217"]],["Cool Brown",["#603813","#b29f94"]],["Harmonic Energy",["#16A085","#F4D03F"]],["Playing with Reds",["#D31027","#EA384D"]],["Sunny Days",["#EDE574","#E1F5C4"]],["Green Beach",["#02AAB0","#00CDAC"]],["Intuitive Purple",["#DA22FF","#9733EE"]],["Emerald Water",["#348F50","#56B4D3"]],["Lemon Twist",["#3CA55C","#B5AC49"]],["Monte Carlo",["#CC95C0","#DBD4B4","#7AA1D2"]],["Horizon",["#003973","#E5E5BE"]],["Rose Water",["#E55D87","#5FC3E4"]],["Frozen",["#403B4A","#E7E9BB"]],["Mango Pulp",["#F09819","#EDDE5D"]],["Bloody Mary",["#FF512F","#DD2476"]],["Aubergine",["#AA076B","#61045F"]],["Aqua Marine",["#1A2980","#26D0CE"]],["Sunrise",["#FF512F","#F09819"]],["Purple Paradise",["#1D2B64","#F8CDDA"]],["Stripe",["#1FA2FF","#12D8FA","#A6FFCB"]],["Sea Weed",["#4CB8C4","#3CD3AD"]],["Pinky",["#DD5E89","#F7BB97"]],["Cherry",["#EB3349","#F45C43"]],["Mojito",["#1D976C","#93F9B9"]],["Juicy Orange",["#FF8008","#FFC837"]],["Mirage",["#16222A","#3A6073"]],["Steel Gray",["#1F1C2C","#928DAB"]],["Kashmir",["#614385","#516395"]],["Electric Violet",["#4776E6","#8E54E9"]],["Venice Blue",["#085078","#85D8CE"]],["Bora Bora",["#2BC0E4","#EAECC6"]],["Moss",["#134E5E","#71B280"]],["Shroom Haze",["#5C258D","#4389A2"]],["Mystic",["#757F9A","#D7DDE8"]],["Midnight City",["#232526","#414345"]],["Sea Blizz",["#1CD8D2","#93EDC7"]],["Opa",["#3D7EAA","#FFE47A"]],["Titanium",["#283048","#859398"]],["Mantle",["#24C6DC","#514A9D"]],["Dracula",["#DC2424","#4A569D"]],["Peach",["#ED4264","#FFEDBC"]],["Moonrise",["#DAE2F8","#D6A4A4"]],["Clouds",["#ECE9E6","#FFFFFF"]],["Stellar",["#7474BF","#348AC7"]],["Bourbon",["#EC6F66","#F3A183"]],["Calm Darya",["#5f2c82","#49a09d"]],["Influenza",["#C04848","#480048"]],["Shrimpy",["#e43a15","#e65245"]],["Army",["#414d0b","#727a17"]],["Miaka",["#FC354C","#0ABFBC"]],["Pinot Noir",["#4b6cb7","#182848"]],["Day Tripper",["#f857a6","#ff5858"]],["Namn",["#a73737","#7a2828"]],["Blurry Beach",["#d53369","#cbad6d"]],["Vasily",["#e9d362","#333333"]],["A Lost Memory",["#DE6262","#FFB88C"]],["Petrichor",["#666600","#999966"]],["Jonquil",["#FFEEEE","#DDEFBB"]],["Sirius Tamed",["#EFEFBB","#D4D3DD"]],["Kyoto",["#c21500","#ffc500"]],["Misty Meadow",["#215f00","#e4e4d9"]],["Aqualicious",["#50C9C3","#96DEDA"]],["Moor",["#616161","#9bc5c3"]],["Almost",["#ddd6f3","#faaca8"]],["Forever Lost",["#5D4157","#A8CABA"]],["Winter",["#E6DADA","#274046"]],["Nelson",["#f2709c","#ff9472"]],["Autumn",["#DAD299","#B0DAB9"]],["Candy",["#D3959B","#BFE6BA"]],["Reef",["#00d2ff","#3a7bd5"]],["The Strain",["#870000","#190A05"]],["Dirty Fog",["#B993D6","#8CA6DB"]],["Earthly",["#649173","#DBD5A4"]],["Virgin",["#C9FFBF","#FFAFBD"]],["Ash",["#606c88","#3f4c6b"]],["Cherryblossoms",["#FBD3E9","#BB377D"]],["Parklife",["#ADD100","#7B920A"]],["Dance To Forget",["#FF4E50","#F9D423"]],["Starfall",["#F0C27B","#4B1248"]],["Red Mist",["#000000","#e74c3c"]],["Teal Love",["#AAFFA9","#11FFBD"]],["Neon Life",["#B3FFAB","#12FFF7"]],["Man of Steel",["#780206","#061161"]],["Amethyst",["#9D50BB","#6E48AA"]],["Cheer Up Emo Kid",["#556270","#FF6B6B"]],["Shore",["#70e1f5","#ffd194"]],["Facebook Messenger",["#00c6ff","#0072ff"]],["SoundCloud",["#fe8c00","#f83600"]],["Behongo",["#52c234","#061700"]],["ServQuick",["#485563","#29323c"]],["Friday",["#83a4d4","#b6fbff"]],["Martini",["#FDFC47","#24FE41"]],["Metallic Toad",["#abbaab","#ffffff"]],["Between The Clouds",["#73C8A9","#373B44"]],["Crazy Orange I",["#D38312","#A83279"]],["Hersheys",["#1e130c","#9a8478"]],["Talking To Mice Elf",["#948E99","#2E1437"]],["Purple Bliss",["#360033","#0b8793"]],["Predawn",["#FFA17F","#00223E"]],["Endless River",["#43cea2","#185a9d"]],["Pastel Orange at the Sun",["#ffb347","#ffcc33"]],["Twitch",["#6441A5","#2a0845"]],["Atlas",["#FEAC5E","#C779D0","#4BC0C8"]],["Instagram",["#833ab4","#fd1d1d","#fcb045"]],["Flickr",["#ff0084","#33001b"]],["Vine",["#00bf8f","#001510"]],["Turquoise flow",["#136a8a","#267871"]],["Portrait",["#8e9eab","#eef2f3"]],["Virgin America",["#7b4397","#dc2430"]],["Koko Caramel",["#D1913C","#FFD194"]],["Fresh Turboscent",["#F1F2B5","#135058"]],["Green to dark",["#6A9113","#141517"]],["Ukraine",["#004FF9","#FFF94C"]],["Curiosity blue",["#525252","#3d72b4"]],["Dark Knight",["#BA8B02","#181818"]],["Piglet",["#ee9ca7","#ffdde1"]],["Lizard",["#304352","#d7d2cc"]],["Sage Persuasion",["#CCCCB2","#757519"]],["Between Night and Day",["#2c3e50","#3498db"]],["Timber",["#fc00ff","#00dbde"]],["Passion",["#e53935","#e35d5b"]],["Clear Sky",["#005C97","#363795"]],["Master Card",["#f46b45","#eea849"]],["Back To Earth",["#00C9FF","#92FE9D"]],["Deep Purple",["#673AB7","#512DA8"]],["Little Leaf",["#76b852","#8DC26F"]],["Netflix",["#8E0E00","#1F1C18"]],["Light Orange",["#FFB75E","#ED8F03"]],["Green and Blue",["#c2e59c","#64b3f4"]],["Poncho",["#403A3E","#BE5869"]],["Back to the Future",["#C02425","#F0CB35"]],["Blush",["#B24592","#F15F79"]],["Inbox",["#457fca","#5691c8"]],["Purplin",["#6a3093","#a044ff"]],["Pale Wood",["#eacda3","#d6ae7b"]],["Haikus",["#fd746c","#ff9068"]],["Pizelex",["#114357","#F29492"]],["Joomla",["#1e3c72","#2a5298"]],["Christmas",["#2F7336","#AA3A38"]],["Minnesota Vikings",["#5614B0","#DBD65C"]],["Miami Dolphins",["#4DA0B0","#D39D38"]],["Forest",["#5A3F37","#2C7744"]],["Nighthawk",["#2980b9","#2c3e50"]],["Superman",["#0099F7","#F11712"]],["Suzy",["#834d9b","#d04ed6"]],["Dark Skies",["#4B79A1","#283E51"]],["Deep Space",["#000000","#434343"]],["Decent",["#4CA1AF","#C4E0E5"]],["Colors Of Sky",["#E0EAFC","#CFDEF3"]],["Purple White",["#BA5370","#F4E2D8"]],["Ali",["#ff4b1f","#1fddff"]],["Alihossein",["#f7ff00","#db36a4"]],["Shahabi",["#a80077","#66ff00"]],["Red Ocean",["#1D4350","#A43931"]],["Tranquil",["#EECDA3","#EF629F"]],["Transfile",["#16BFFD","#CB3066"]],["Sylvia",["#ff4b1f","#ff9068"]],["Sweet Morning",["#FF5F6D","#FFC371"]],["Politics",["#2196f3","#f44336"]],["Bright Vault",["#00d2ff","#928DAB"]],["Solid Vault",["#3a7bd5","#3a6073"]],["Sunset",["#0B486B","#F56217"]],["Grapefruit Sunset",["#e96443","#904e95"]],["Deep Sea Space",["#2C3E50","#4CA1AF"]],["Dusk",["#2C3E50","#FD746C"]],["Minimal Red",["#F00000","#DC281E"]],["Royal",["#141E30","#243B55"]],["Mauve",["#42275a","#734b6d"]],["Frost",["#000428","#004e92"]],["Lush",["#56ab2f","#a8e063"]],["Firewatch",["#cb2d3e","#ef473a"]],["Sherbert",["#f79d00","#64f38c"]],["Blood Red",["#f85032","#e73827"]],["Sun on the Horizon",["#fceabb","#f8b500"]],["IIIT Delhi",["#808080","#3fada8"]],["Jupiter",["#ffd89b","#19547b"]],["50 Shades of Grey",["#bdc3c7","#2c3e50"]],["Dania",["#BE93C5","#7BC6CC"]],["Limeade",["#A1FFCE","#FAFFD1"]],["Disco",["#4ECDC4","#556270"]],["Love Couple",["#3a6186","#89253e"]],["Azure Pop",["#ef32d9","#89fffd"]],["Nepal",["#de6161","#2657eb"]],["Cosmic Fusion",["#ff00cc","#333399"]],["Snapchat",["#fffc00","#ffffff"]],["Ed's Sunset Gradient",["#ff7e5f","#feb47b"]],["Brady Brady Fun Fun",["#00c3ff","#ffff1c"]],["Black Rosé",["#f4c4f3","#fc67fa"]],["80's Purple",["#41295a","#2F0743"]],["Radar",["#A770EF","#CF8BF3","#FDB99B"]],["Ibiza Sunset",["#ee0979","#ff6a00"]],["Dawn",["#F3904F","#3B4371"]],["Mild",["#67B26F","#4ca2cd"]],["Vice City",["#3494E6","#EC6EAD"]],["Jaipur",["#DBE6F6","#C5796D"]],["Jodhpur",["#9CECFB","#65C7F7","#0052D4"]],["Cocoaa Ice",["#c0c0aa","#1cefff"]],["EasyMed",["#DCE35B","#45B649"]],["Rose Colored Lenses",["#E8CBC0","#636FA4"]],["What lies Beyond",["#F0F2F0","#000C40"]],["Roseanna",["#FFAFBD","#ffc3a0"]],["Honey Dew",["#43C6AC","#F8FFAE"]],["Under the Lake",["#093028","#237A57"]],["The Blue Lagoon",["#43C6AC","#191654"]],["Can You Feel The Love Tonight",["#4568DC","#B06AB3"]],["Very Blue",["#0575E6","#021B79"]],["Love and Liberty",["#200122","#6f0000"]],["Orca",["#44A08D","#093637"]],["Venice",["#6190E8","#A7BFE8"]],["Pacific Dream",["#34e89e","#0f3443"]],["Learning and Leading",["#F7971E","#FFD200"]],["Celestial",["#C33764","#1D2671"]],["Purplepine",["#20002c","#cbb4d4"]],["Sha la la",["#D66D75","#E29587"]],["Mini",["#30E8BF","#FF8235"]],["Maldives",["#B2FEFA","#0ED2F7"]],["Cinnamint",["#4AC29A","#BDFFF3"]],["Html",["#E44D26","#F16529"]],["Coal",["#EB5757","#000000"]],["Sunkist",["#F2994A","#F2C94C"]],["Blue Skies",["#56CCF2","#2F80ED"]],["Chitty Chitty Bang Bang",["#007991","#78ffd6"]],["Visions of Grandeur",["#000046","#1CB5E0"]],["Crystal Clear",["#159957","#155799"]],["Mello",["#c0392b","#8e44ad"]],["Compare Now",["#EF3B36","#FFFFFF"]],["Meridian",["#283c86","#45a247"]],["Relay",["#3A1C71","#D76D77","#FFAF7B"]],["Alive",["#CB356B","#BD3F32"]],["Scooter",["#36D1DC","#5B86E5"]],["Terminal",["#000000","#0f9b0f"]],["Telegram",["#1c92d2","#f2fcfe"]],["Crimson Tide",["#642B73","#C6426E"]],["Socialive",["#06beb6","#48b1bf"]],["Subu",["#0cebeb","#20e3b2","#29ffc6"]],["Broken Hearts",["#d9a7c7","#fffcdc"]],["Kimoby Is The New Blue",["#396afc","#2948ff"]],["Dull",["#C9D6FF","#E2E2E2"]],["Purpink",["#7F00FF","#E100FF"]],["Orange Coral",["#ff9966","#ff5e62"]],["Summer",["#22c1c3","#fdbb2d"]],["King Yna",["#1a2a6c","#b21f1f","#fdbb2d"]],["Velvet Sun",["#e1eec3","#f05053"]],["Zinc",["#ADA996","#F2F2F2","#DBDBDB","#EAEAEA"]],["Hydrogen",["#667db6","#0082c8","#0082c8","#667db6"]],["Argon",["#03001e","#7303c0","#ec38bc","#fdeff9"]],["Lithium",["#6D6027","#D3CBB8"]],["Digital Water",["#74ebd5","#ACB6E5"]],["Orange Fun",["#fc4a1a","#f7b733"]],["Rainbow Blue",["#00F260","#0575E6"]],["Pink Flavour",["#800080","#ffc0cb"]],["Sulphur",["#CAC531","#F3F9A7"]],["Selenium",["#3C3B3F","#605C3C"]],["Delicate",["#D3CCE3","#E9E4F0"]],["Ohhappiness",["#00b09b","#96c93d"]],["Lawrencium",["#0f0c29","#302b63","#24243e"]],["Relaxing red",["#fffbd5","#b20a2c"]],["Taran Tado",["#23074d","#cc5333"]],["Bighead",["#c94b4b","#4b134f"]],["Sublime Vivid",["#FC466B","#3F5EFB"]],["Sublime Light",["#FC5C7D","#6A82FB"]],["Pun Yeta",["#108dc7","#ef8e38"]],["Quepal",["#11998e","#38ef7d"]],["Sand to Blue",["#3E5151","#DECBA4"]],["Wedding Day Blues",["#40E0D0","#FF8C00","#FF0080"]],["Shifter",["#bc4e9c","#f80759"]],["Red Sunset",["#355C7D","#6C5B7B","#C06C84"]],["Moon Purple",["#4e54c8","#8f94fb"]],["Pure Lust",["#333333","#dd1818"]],["Slight Ocean View",["#a8c0ff","#3f2b96"]],["eXpresso",["#ad5389","#3c1053"]],["Shifty",["#636363","#a2ab58"]],["Vanusa",["#DA4453","#89216B"]],["Evening Night",["#005AA7","#FFFDE4"]],["Magic",["#59C173","#a17fe0","#5D26C1"]],["Margo",["#FFEFBA","#FFFFFF"]],["Blue Raspberry",["#00B4DB","#0083B0"]],["Citrus Peel",["#FDC830","#F37335"]],["Sin City Red",["#ED213A","#93291E"]],["Rastafari",["#1E9600","#FFF200","#FF0000"]],["Summer Dog",["#a8ff78","#78ffd6"]],["Wiretap",["#8A2387","#E94057","#F27121"]],["Burning Orange",["#FF416C","#FF4B2B"]],["Ultra Voilet",["#654ea3","#eaafc8"]],["By Design",["#009FFF","#ec2F4B"]],["Kyoo Tah",["#544a7d","#ffd452"]],["Kye Meh",["#8360c3","#2ebf91"]],["Kyoo Pal",["#dd3e54","#6be585"]],["Metapolis",["#659999","#f4791f"]],["Flare",["#f12711","#f5af19"]],["Witching Hour",["#c31432","#240b36"]],["Azur Lane",["#7F7FD5","#86A8E7","#91EAE4"]],["Neuromancer",["#f953c6","#b91d73"]],["Harvey",["#1f4037","#99f2c8"]],["Amin",["#8E2DE2","#4A00E0"]],["Memariani",["#aa4b6b","#6b6b83","#3b8d99"]],["Yoda",["#FF0099","#493240"]],["Cool Sky",["#2980B9","#6DD5FA","#FFFFFF"]],["Dark Ocean",["#373B44","#4286f4"]],["Evening Sunshine",["#b92b27","#1565C0"]],["JShine",["#12c2e9","#c471ed","#f64f59"]],["Moonlit Asteroid",["#0F2027","#203A43","#2C5364"]],["MegaTron",["#C6FFDD","#FBD786","#f7797d"]],["Cool Blues",["#2193b0","#6dd5ed"]],["Piggy Pink",["#ee9ca7","#ffdde1"]],["Grade Grey",["#bdc3c7","#2c3e50"]],["Telko",["#F36222","#5CB644","#007FC3"]],["Zenta",["#2A2D3E","#FECB6E"]],["Electric Peacock",["#8a2be2","#0000cd","#228b22","#ccff00"]],["Under Blue Green",["#051937","#004d7a","#008793","#00bf72","#a8eb12"]],["Lensod",["#6025F5","#FF5555"]],["Newspaper",["#8a2be2","#ffa500","#f8f8ff"]],["Dark Blue Gradient",["#2774ae","#002E5D","#002E5D"]],["Dark Blu Two",["#004680","#4484BA"]],["Lemon Lime",["#7ec6bc","#ebe717"]],["Beleko",["#ff1e56","#f9c942","#1e90ff"]],["Mango Papaya",["#de8a41","#2ada53"]],["Unicorn Rainbow",["#f7f0ac","#acf7f0","#f0acf7"]],["Flame",["#ff0000","#fdcf58"]],["Blue Red",["#36B1C7","#960B33"]],["Twitter",["#1DA1F2","#009ffc"]],["Blooze",["#6da6be","#4b859e","#6da6be"]],["Blue Slate",["#B5B9FF","#2B2C49"]],["Space Light Green",["#9FA0A8","#5C7852"]],["Flower",["#DCFFBD","#CC86D1"]],["Elate The Euge",["#8BDEDA","#43ADD0","#998EE0","#E17DC2","#EF9393"]],["Peach Sea",["#E6AE8C","#A8CECF"]],["Abbas",["#00fff0","#0083fe"]],["Winter Woods",["#333333","#a2ab58","#A43931"]],["Ameena",["#0c0c6d","#de512b","#98d0c1","#5bb226","#023c0d"]],["Emerald Sea",["#05386b","#5cdb95"]],["Bleem",["#4284DB","#29EAC4"]],["Coffee Gold",["#554023","#c99846"]],["Compass",["#516b8b","#056b3b"]],["Andreuzza's",["#D70652","#FF025E"]],["Moonwalker",["#152331","#000000"]],["Whinehouse",["#f7f7f7","#b9a0a0","#794747","#4e2020","#111111"]],["Hyper Blue",["#59CDE9","#0A2A88"]],["Racker",["#EB0000","#95008A","#3300FC"]],["After the Rain",["#ff75c3","#ffa647","#ffe83f","#9fff5b","#70e2ff","#cd93ff"]],["Neon Green",["#81ff8a","#64965e"]],["Dusty Grass",["#d4fc79","#96e6a1"]],["Visual Blue",["#003d4d","#00c996"]]];
+
+// Traditional Japanese colors (wa-iro). [romaji, kanji, hex]
+const WAIRO = [
+  ["Sakura","桜","#FEDFE1"],["Momo","桃","#F596AA"],["Kōbai","紅梅","#E16B8C"],["Kurenai","紅","#CB1B45"],
+  ["Akane","茜","#CB4042"],["Benihi","紅緋","#F75C2F"],["Sango","珊瑚","#F17C67"],["Kaki","柿","#ED784A"],
+  ["Kuchiba","朽葉","#E2943B"],["Kohaku","琥珀","#CA7A2C"],["Yamabuki","山吹","#FFB11B"],["Kihada","黄蘗","#FBE251"],
+  ["Uguisu","鶯","#6C6A2D"],["Koke","苔","#838A2D"],["Moegi","萌黄","#7BA23F"],["Nae","苗","#86C166"],
+  ["Wakatake","若竹","#5DAC81"],["Tokiwa","常磐","#1B813E"],["Rokushō","緑青","#24936E"],["Mizu","水","#81C7D4"],
+  ["Asagi","浅葱","#33A6B8"],["Hanada","縹","#006284"],["Ruri","瑠璃","#005CAF"],["Ai","藍","#0D5661"],
+  ["Kon","紺","#0F2540"],["Benikake","紅掛花","#4E4F97"],["Fuji","藤","#8B81C3"],["Shion","紫苑","#8F77B5"],
+  ["Murasaki","紫","#77428D"],["Ebi","葡萄","#6D2E5B"],["Sumi","墨","#1C1C1C"],["Nezumi","鼠","#828282"],
+  ["Rikyū","利休鼠","#707C74"],["Ginnezu","銀鼠","#91989F"],["Shironeri","白練","#FCFAF2"],["Gofun","胡粉","#FFFFFB"],
+  ["Kincha","金茶","#C7802D"],["Kogane","黄金","#E9CD4C"],["Tsuyukusa","露草","#2EA9DF"],["Mizuasagi","水浅葱","#66BAB7"],
+];
+// Classic hues for the top row; traditional colors are sorted into these same columns.
+const CLASSIC = [["Red","#EF4444"],["Orange","#F97316"],["Yellow","#EAB308"],["Green","#22C55E"],["Cyan","#06B6D4"],["Blue","#3B82F6"],["Violet","#8B5CF6"],["Pink","#EC4899"],["Rose","#F43F5E"]];
+// Gradients composed from those colors. [romaji, kanji, stops]
+const WAGRAD = [
+  ["Yozakura","夜桜",["#0F2540","#8B81C3","#FEDFE1"]],["Asagiri","朝霧",["#FCFAF2","#A5DEE4","#66BAB7"]],
+  ["Yūyake","夕焼け",["#4E4F97","#F75C2F","#FFB11B"]],["Hinode","日の出",["#0F2540","#CB1B45","#FFB11B"]],
+  ["Momiji","紅葉",["#6D2E5B","#CB4042","#E2943B"]],["Wakaba","若葉",["#5DAC81","#86C166","#FBE251"]],
+  ["Aizome","藍染",["#0F2540","#0D5661","#33A6B8"]],["Fujinami","藤波",["#77428D","#8B81C3","#FEDFE1"]],
+  ["Ume","梅",["#E16B8C","#FCFAF2"]],["Tsuki","月",["#0F2540","#4E4F97","#E9CD4C"]],
+  ["Hotaru","蛍",["#0B1013","#1B813E","#E9CD4C"]],["Sumi-e","墨絵",["#1C1C1C","#828282","#FFFFFB"]],
+  ["Kintsugi","金継ぎ",["#1C1C1C","#C7802D","#E9CD4C"]],["Kohaku","琥珀",["#CA7A2C","#FFB11B"]],
+  ["Shinkai","深海",["#08192D","#005CAF","#2EA9DF"]],["Ajisai","紫陽花",["#4E4F97","#8F77B5","#F596AA"]],
+  ["Matcha","抹茶",["#6C6A2D","#838A2D","#C5C56A"]],["Sango","珊瑚",["#F17C67","#FEDFE1"]],
+  ["Tokiwa","常磐",["#1B813E","#24936E","#66BAB7"]],["Yuki","雪",["#FFFFFB","#DAE3EA","#91989F"]],
+  ["Kitsune-bi","狐火",["#1C1C1C","#F75C2F","#FBE251"]],["Rikyū","利休",["#707C74","#91989F","#FCFAF2"]],
+  ["Hanabi","花火",["#0F2540","#CB1B45","#F596AA","#FBE251"]],["Ruri-iro","瑠璃色",["#0F2540","#005CAF","#81C7D4"]],
+  ["Sakura-fubuki","桜吹雪",["#FFFFFB","#FEDFE1","#F596AA"]],["Kōyō","紅葉狩",["#E2943B","#CB4042","#77428D"]],
+  ["Natsuzora","夏空",["#2EA9DF","#81C7D4","#FFFFFB"]],["Kurenai-zome","紅染",["#6D2E5B","#CB1B45","#F17C67"]],
+];
+
+// ===================================================================== color math
+const clamp = (n, a = 0, b = 1) => Math.min(b, Math.max(a, n));
+const toLin = (c) => (c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4);
+const toGam = (c) => (c <= 0.0031308 ? 12.92 * c : 1.055 * c ** (1 / 2.4) - 0.055);
+function rgbToOklch([r, g, b]) {
+  r = toLin(r); g = toLin(g); b = toLin(b);
+  const l = Math.cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b);
+  const m = Math.cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b);
+  const s = Math.cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b);
+  const L = 0.2104542553 * l + 0.793617785 * m - 0.0040720468 * s;
+  const A = 1.9779984951 * l - 2.428592205 * m + 0.4505937099 * s;
+  const B = 0.0259040371 * l + 0.7827717662 * m - 0.808675766 * s;
+  const C = Math.hypot(A, B);
+  return [L, C, C < 1e-4 ? 0 : ((Math.atan2(B, A) * 180) / Math.PI + 360) % 360];
+}
+function oklchToRgbRaw(L, C, H) {
+  const a = C * Math.cos((H * Math.PI) / 180), b = C * Math.sin((H * Math.PI) / 180);
+  const l = (L + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m = (L - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s = (L - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  return [
+    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
+  ].map(toGam);
+}
+const inGamut = (rgb) => rgb.every((c) => c >= -1e-4 && c <= 1 + 1e-4);
+// Out-of-gamut OKLCH keeps L and H and drops chroma until it fits, which is what a designer expects.
+function oklchToRgb(L, C, H) {
+  let rgb = oklchToRgbRaw(L, C, H);
+  if (inGamut(rgb)) return rgb.map((c) => clamp(c));
+  let lo = 0, hi = C;
+  for (let i = 0; i < 20; i++) { const mid = (lo + hi) / 2; if (inGamut(oklchToRgbRaw(L, mid, H))) lo = mid; else hi = mid; }
+  return oklchToRgbRaw(L, lo, H).map((c) => clamp(c));
+}
+function hsvToRgb({ h, s, v }) {
+  const f = (n) => { const k = (n + h / 60) % 6; return v - v * s * Math.max(0, Math.min(k, 4 - k, 1)); };
+  return [f(5), f(3), f(1)];
+}
+function rgbToHsv([r, g, b], prevH = 0) {
+  const max = Math.max(r, g, b), d = max - Math.min(r, g, b);
+  let h = prevH;
+  if (d > 1e-6) {
+    h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    h = (h * 60 + 360) % 360;
+  }
+  return { h, s: max ? d / max : 0, v: max };
+}
+const hex2 = (n) => Math.round(clamp(n) * 255).toString(16).padStart(2, "0");
+const rgbHex = (rgb, a = 1) => "#" + rgb.map(hex2).join("") + (a < 1 ? hex2(a) : "");
+function parseHex(str) {
+  let s = str.trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3,4}$/i.test(s)) s = [...s].map((c) => c + c).join("");
+  if (!/^([0-9a-f]{6}|[0-9a-f]{8})$/i.test(s)) return null;
+  const n = (i) => parseInt(s.slice(i, i + 2), 16) / 255;
+  return { rgb: [n(0), n(2), n(4)], a: s.length === 8 ? n(6) : 1 };
+}
+const fromHex = (h) => { const p = parseHex(h); return { ...rgbToHsv(p.rgb), a: p.a }; };
+const cssOf = (c) => rgbHex(hsvToRgb(c), c.a);
+const cloneC = (c) => ({ ...c });
+
+function gradientCss(g, forceLinear) {
+  const stops = [...g.stops].sort((a, b) => a.pos - b.pos).map((s) => `${cssOf(s.color)} ${Math.round(s.pos * 100)}%`).join(", ");
+  const interp = g.interp === "srgb" ? "" : ` in ${g.interp}`;
+  if (forceLinear) return `linear-gradient(90deg${interp}, ${stops})`;
+  if (g.type === "radial") return `radial-gradient(circle${interp}, ${stops})`;
+  if (g.type === "conic") return `conic-gradient(from ${Math.round(g.angle)}deg${interp}, ${stops})`;
+  return `linear-gradient(${Math.round(g.angle)}deg${interp}, ${stops})`;
+}
+const gradFromHexes = (hexes, name) => ({
+  type: "linear", angle: 135, interp: "oklab", name,
+  stops: hexes.map((h, i) => ({ pos: hexes.length === 1 ? 0 : i / (hexes.length - 1), color: fromHex(h) })),
+  sel: 0,
+});
+const cloneG = (g) => ({ ...g, stops: g.stops.map((s) => ({ pos: s.pos, color: cloneC(s.color) })) });
+function sampleGradient(g, pos) {
+  const st = [...g.stops].sort((a, b) => a.pos - b.pos);
+  if (pos <= st[0].pos) return cloneC(st[0].color);
+  for (let i = 1; i < st.length; i++) {
+    if (pos <= st[i].pos) {
+      const t = (pos - st[i - 1].pos) / (st[i].pos - st[i - 1].pos || 1);
+      const A = hsvToRgb(st[i - 1].color), B = hsvToRgb(st[i].color);
+      return { ...rgbToHsv(A.map((c, k) => c + (B[k] - c) * t)), a: st[i - 1].color.a + (st[i].color.a - st[i - 1].color.a) * t };
+    }
+  }
+  return cloneC(st[st.length - 1].color);
+}
+
+// ===================================================================== saved (shared)
+const SAVE_KEY = "uipane-color-explore-saved";
+const saved = {
+  items: JSON.parse(localStorage.getItem(SAVE_KEY) || "null") ?? [
+    { kind: "solid", hex: "#8b7bff" }, { kind: "solid", hex: "#ff6b6b" }, { kind: "solid", hex: "#2ea9df" },
+    { kind: "gradient", g: gradFromHexes(["#0F2540", "#8B81C3", "#FEDFE1"], "Yozakura") },
+  ],
+  subs: new Set(),
+  add(item) {
+    const key = JSON.stringify(item);
+    if (this.items.some((i) => JSON.stringify(i) === key)) return;
+    this.items.push(item); this.emit();
+  },
+  remove(item) { this.items = this.items.filter((i) => i !== item); this.emit(); },
+  emit() { localStorage.setItem(SAVE_KEY, JSON.stringify(this.items)); this.subs.forEach((f) => f()); },
+};
+
+// ===================================================================== tiny DOM helpers
+function el(tag, attrs = {}, ...kids) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v;
+    else if (k === "style") for (const [sk, sv] of Object.entries(v)) sk.startsWith("--") ? e.style.setProperty(sk, sv) : (e.style[sk] = sv);
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (k === "html") e.innerHTML = v;
+    else e.setAttribute(k, v);
+  }
+  for (const k of kids.flat()) if (k != null) e.append(k);
+  return e;
+}
+const ICON = {
+  chev: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>',
+  plus: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></svg>',
+  drop: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.5 4.5l5 5M11 8l5 5M4 20l1-4 9.5-9.5 3 3L8 19z"/></svg>',
+  swap: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M8 9l4-4 4 4M8 15l4 4 4-4"/></svg>',
+  solid: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg>',
+  grad: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>',
+  lib: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="4" width="7" height="7" rx="2"/><rect x="13" y="4" width="7" height="7" rx="2" opacity=".6"/><rect x="4" y="13" width="7" height="7" rx="2" opacity=".6"/><rect x="13" y="13" width="7" height="7" rx="2" opacity=".35"/></svg>',
+};
+const tip = document.getElementById("tip");
+function withTip(node, text) {
+  node.addEventListener("mouseenter", () => { tip.textContent = text; tip.style.opacity = 1; });
+  node.addEventListener("mousemove", (e) => { tip.style.left = e.clientX + 12 + "px"; tip.style.top = e.clientY + 14 + "px"; });
+  node.addEventListener("mouseleave", () => (tip.style.opacity = 0));
+  return node;
+}
+function drag(node, onMove, onEnd) {
+  node.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    node.setPointerCapture(e.pointerId);
+    onMove(e, true);
+    const move = (ev) => onMove(ev, false);
+    const up = (ev) => { node.removeEventListener("pointermove", move); node.removeEventListener("pointerup", up); onEnd?.(ev); };
+    node.addEventListener("pointermove", move);
+    node.addEventListener("pointerup", up);
+  });
+}
+
+// ===================================================================== scrub field (pointer lock)
+/**
+ * Press and drag scrubs the value; the pointer is locked so long drags never
+ * hit the screen edge. A press without movement drops into text editing.
+ */
+const vcursor = document.getElementById("vcursor");
+function scrubField({ label, get, set, min, max, step, digits = 0, wrap = false, suffix = "" }) {
+  const input = el("input", { spellcheck: "false" });
+  const field = el("label", { class: "field" }, el("span", {}, label), input);
+  const fmt = (v) => v.toFixed(digits) + suffix;
+  const apply = (v) => set(wrap ? ((v - min) % (max - min) + (max - min)) % (max - min) + min : clamp(v, min, max));
+  let start = 0, acc = 0, moved = 0, active = false;
+
+  const onMove = (e) => {
+    if (!active) return;
+    const dx = e.movementX || 0;
+    moved += Math.abs(dx);
+    if (moved < 3) return;
+    field.classList.add("scrubbing");
+    acc += dx * step * (e.shiftKey ? 10 : e.altKey ? 0.1 : 1);
+    apply(start + acc);
+  };
+  const onUp = () => {
+    if (!active) return;
+    active = false;
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+    if (document.pointerLockElement === field) document.exitPointerLock();
+    vcursor.classList.remove("on");
+    field.classList.remove("scrubbing");
+    if (moved < 3) {
+      field.classList.add("editing");
+      input.focus();
+      input.select();
+    }
+  };
+  field.addEventListener("mousedown", (e) => {
+    if (e.button !== 0 || field.classList.contains("editing")) return;
+    e.preventDefault();
+    getSelection()?.removeAllRanges();
+    if (document.activeElement instanceof HTMLInputElement) document.activeElement.blur();
+    active = true; moved = 0; acc = 0; start = get();
+    // Pointer lock hides the OS cursor; this stand-in keeps it visible, pinned where the drag began.
+    vcursor.style.left = e.clientX + "px";
+    vcursor.style.top = e.clientY + "px";
+    const showWhenLocked = () => {
+      if (active && document.pointerLockElement === field) vcursor.classList.add("on");
+      document.removeEventListener("pointerlockchange", showWhenLocked);
+    };
+    document.addEventListener("pointerlockchange", showWhenLocked);
+    // Lock on press: browsers only grant pointer lock inside the gesture itself.
+    field.requestPointerLock?.()?.catch?.(() => {});
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+  });
+  const commit = () => {
+    const v = parseFloat(input.value);
+    if (!Number.isNaN(v)) apply(v);
+    field.classList.remove("editing");
+    sync();
+  };
+  input.addEventListener("blur", commit);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") input.blur();
+    if (e.key === "Escape") { field.classList.remove("editing"); sync(); input.blur(); }
+    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+      e.preventDefault();
+      apply(get() + (e.key === "ArrowUp" ? 1 : -1) * step * 10 * (e.shiftKey ? 10 : 1));
+      sync(true);
+    }
+  });
+  function sync(force) {
+    if (!force && document.activeElement === input) return;
+    input.value = fmt(get());
+  }
+  field.sync = sync;
+  return field;
+}
+
+function hexField({ get, set }) {
+  const input = el("input", { spellcheck: "false" });
+  const field = el("label", { class: "field text" }, el("span", {}, "#"), input);
+  input.addEventListener("keydown", (e) => { if (e.key === "Enter") input.blur(); });
+  input.addEventListener("blur", () => { const p = parseHex(input.value); if (p) set(p.rgb); field.sync(true); });
+  field.sync = (force) => { if (force || document.activeElement !== input) input.value = get().slice(1, 7).toUpperCase(); };
+  return field;
+}
+
+// ===================================================================== color editor (area + sliders + fields)
+const FORMATS = ["hex", "oklch", "rgb"];
+let sharedFormat = localStorage.getItem("uipane-color-explore-format") || "hex";
+
+function colorEditor({ get, set, compact }) {
+  const root = el("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } });
+  const area = el("div", { class: "area", style: compact ? { height: "120px" } : {} });
+  const areaThumb = el("div", { class: "thumb" });
+  area.append(areaThumb);
+  const hue = el("div", { class: "slider hue" }, el("div", { class: "thumb" }));
+  const alphaFill = el("i");
+  const alpha = el("div", { class: "slider alpha" }, alphaFill, el("div", { class: "thumb" }));
+  const swatchFill = el("i");
+  const swatch = el("div", { class: "swatch" }, swatchFill);
+
+  const change = (patch) => { set({ ...get(), ...patch }); sync(); };
+  drag(area, (e) => {
+    const r = area.getBoundingClientRect();
+    change({ s: clamp((e.clientX - r.left) / r.width), v: 1 - clamp((e.clientY - r.top) / r.height) });
+  });
+  drag(hue, (e) => { const r = hue.getBoundingClientRect(); change({ h: clamp((e.clientX - r.left) / r.width) * 359.9 }); });
+  drag(alpha, (e) => { const r = alpha.getBoundingClientRect(); change({ a: Math.round(clamp((e.clientX - r.left) / r.width) * 100) / 100 }); });
+
+  const kids = [];
+  if (window.EyeDropper) {
+    kids.push(withTip(el("button", { class: "icon-btn", html: ICON.drop, onclick: async () => {
+      try { const { sRGBHex } = await new EyeDropper().open(); change(rgbToHsv(parseHex(sRGBHex).rgb, get().h)); } catch {}
+    } }), "Pick from screen"));
+  }
+  root.append(area, el("div", { class: "row" }, ...kids, el("div", { class: "sliders" }, hue, alpha), swatch));
+
+  // Fields — rebuilt when the format toggles.
+  const fmtBtn = el("button", { class: "fmt", onclick: () => {
+    sharedFormat = FORMATS[(FORMATS.indexOf(sharedFormat) + 1) % FORMATS.length];
+    localStorage.setItem("uipane-color-explore-format", sharedFormat);
+    document.dispatchEvent(new Event("cp-format"));
+  } });
+  const fieldsRow = el("div", { class: "fields" });
+  root.append(fieldsRow);
+  let fields = [];
+  const okl = () => rgbToOklch(hsvToRgb(get()));
+  const setOkl = (L, C, H) => change(rgbToHsv(oklchToRgb(L, C, H), get().h));
+  const alphaF = () => scrubField({ label: "A", get: () => get().a * 100, set: (v) => change({ a: v / 100 }), min: 0, max: 100, step: 0.5, suffix: "%" });
+  function buildFields() {
+    fmtBtn.innerHTML = `<span class="name">${sharedFormat.toUpperCase()}</span>` + ICON.swap;
+    fmtBtn.title = `Format: ${sharedFormat.toUpperCase()} (click to switch)`;
+    if (sharedFormat === "hex") {
+      fields = [hexField({ get: () => cssOf(get()), set: (rgb) => change(rgbToHsv(rgb, get().h)) }), alphaF()];
+    } else if (sharedFormat === "oklch") {
+      fields = [
+        scrubField({ label: "L", get: () => okl()[0] * 100, set: (v) => { const [, C, H] = okl(); setOkl(v / 100, C, H); }, min: 0, max: 100, step: 0.25, digits: 0 }),
+        scrubField({ label: "C", get: () => okl()[1], set: (v) => { const [L, , H] = okl(); setOkl(L, v, H); }, min: 0, max: 0.37, step: 0.001, digits: 3 }),
+        scrubField({ label: "H", get: () => okl()[2], set: (v) => { const [L, C] = okl(); setOkl(L, C, v); }, min: 0, max: 360, step: 0.5, wrap: true }),
+        alphaF(),
+      ];
+    } else {
+      fields = [0, 1, 2].map((i) => scrubField({ label: "RGB"[i], get: () => hsvToRgb(get())[i] * 255, set: (v) => { const rgb = hsvToRgb(get()); rgb[i] = v / 255; change(rgbToHsv(rgb, get().h)); }, min: 0, max: 255, step: 0.5 }));
+      fields.push(alphaF());
+    }
+    fieldsRow.replaceChildren(fmtBtn, ...fields);
+    sync();
+  }
+  document.addEventListener("cp-format", buildFields);
+
+  function sync() {
+    const c = get();
+    const pure = rgbHex(hsvToRgb({ h: c.h, s: 1, v: 1 }));
+    const css = cssOf(c);
+    area.style.background = `linear-gradient(to top, #000, transparent), linear-gradient(to right, #fff, ${pure})`;
+    areaThumb.style.left = c.s * 100 + "%";
+    areaThumb.style.top = (1 - c.v) * 100 + "%";
+    areaThumb.style.background = rgbHex(hsvToRgb(c));
+    hue.firstChild.style.left = (c.h / 360) * 100 + "%";
+    hue.firstChild.style.background = pure;
+    alphaFill.style.background = `linear-gradient(to right, transparent, ${rgbHex(hsvToRgb(c))})`;
+    alpha.lastChild.style.left = c.a * 100 + "%";
+    swatchFill.style.background = css;
+    fields.forEach((f) => f.sync());
+  }
+  root.sync = sync;
+  buildFields();
+  return root;
+}
+
+// ===================================================================== gradient editor
+function gradientEditor({ getG, onChange, compact }) {
+  const root = el("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } });
+  const fill = el("i");
+  const bar = el("div", { class: "gbar" }, fill);
+  const stopsLayer = el("div", { style: { position: "absolute", inset: 0 } });
+  bar.append(stopsLayer);
+  const typeSeg = el("div", { class: "seg" });
+  const interpSeg = el("div", { class: "seg" });
+  const angle = scrubField({ label: "∠", get: () => getG().angle, set: (v) => { getG().angle = v; onChange(); }, min: 0, max: 360, step: 1, wrap: true, suffix: "°" });
+  angle.style.flex = "0 0 74px";
+  const editor = colorEditor({
+    get: () => { const g = getG(); return g.stops[g.sel].color; },
+    set: (c) => { const g = getG(); g.stops[g.sel].color = c; onChange(true); },
+    compact,
+  });
+
+  bar.addEventListener("pointerdown", (e) => {
+    if (e.target.classList.contains("stop")) return;
+    const r = bar.getBoundingClientRect();
+    const pos = clamp((e.clientX - r.left) / r.width);
+    const g = getG();
+    g.stops.push({ pos, color: sampleGradient(g, pos) });
+    g.sel = g.stops.length - 1;
+    onChange();
+  });
+  root.addEventListener("keydown", (e) => {
+    if ((e.key === "Delete" || e.key === "Backspace") && e.target.tagName !== "INPUT") removeSel();
+  });
+  root.tabIndex = -1;
+  root.style.outline = "none";
+  function removeSel() {
+    const g = getG();
+    if (g.stops.length <= 2) return;
+    g.stops.splice(g.sel, 1);
+    g.sel = Math.max(0, g.sel - 1);
+    onChange();
+  }
+
+  function sync() {
+    const g = getG();
+    fill.style.background = gradientCss(g, true);
+    stopsLayer.replaceChildren(...g.stops.map((s, i) => {
+      const h = el("div", { class: "stop" + (i === g.sel ? " sel" : ""), style: { left: s.pos * 100 + "%", background: cssOf(s.color) } });
+      let removing = false;
+      drag(h, (e, first) => {
+        if (first) { g.sel = i; root.focus({ preventScroll: true }); onChange(); return; }
+        const r = bar.getBoundingClientRect();
+        s.pos = clamp((e.clientX - r.left) / r.width);
+        removing = g.stops.length > 2 && e.clientY - r.bottom > 28;
+        h.classList.toggle("removing", removing);
+        h.style.left = s.pos * 100 + "%";
+        fill.style.background = gradientCss(g, true);
+        onChange(false, true);
+      }, () => { if (removing) removeSel(); });
+      return h;
+    }));
+    typeSeg.replaceChildren(...["linear", "radial", "conic"].map((t) =>
+      el("button", { class: g.type === t ? "on" : "", onclick: () => { g.type = t; onChange(); } }, t[0].toUpperCase() + t.slice(1))));
+    interpSeg.replaceChildren(...[["srgb", "sRGB"], ["oklab", "OKLab"], ["oklch", "OKLCH"]].map(([v, l]) =>
+      withTip(el("button", { class: g.interp === v ? "on" : "", onclick: () => { g.interp = v; onChange(); } }, l), `Blend in ${l}`)));
+    angle.style.visibility = g.type === "radial" ? "hidden" : "visible";
+    angle.sync();
+    editor.sync();
+  }
+  root.append(
+    el("div", { class: "gbar-wrap" }, bar),
+    el("div", { class: "row", style: { justifyContent: "space-between" } }, typeSeg, angle),
+    el("div", { class: "row", style: { justifyContent: "space-between" } }, interpSeg, el("span", { class: "hint" }, "blend")),
+    editor,
+  );
+  root.sync = sync;
+  root.syncLight = () => editor.sync();
+  return root;
+}
+
+// ===================================================================== collections
+function section(title, count, jp, buildBody, open = false) {
+  const body = el("div", { class: "body" });
+  const d = el("details", { class: "sect" },
+    el("summary", {}, title, jp ? el("span", { class: "jp" }, jp) : null, count != null ? el("span", { class: "n" }, String(count)) : null, el("span", { html: ICON.chev, style: { marginLeft: "auto", display: "flex" } })),
+    body);
+  // Big collections render on first open so a closed picker stays cheap.
+  let built = false;
+  const build = () => { if (!built && d.open) { built = true; buildBody(body); } };
+  d.addEventListener("toggle", build);
+  if (open) { d.open = true; build(); }
+  d.rebuild = () => { if (built) { body.replaceChildren(); buildBody(body); } };
+  return d;
+}
+function chip(bg, { onClick, tipText, onRemove, label }) {
+  const c = el("div", { class: "chip", onclick: onClick }, el("i", { style: { background: bg } }));
+  if (label) c.append(el("span", { class: "lbl" }, label));
+  if (tipText) withTip(c, tipText);
+  if (onRemove) {
+    c.append(el("button", { class: "x", title: "Remove", onclick: (e) => { e.stopPropagation(); tip.style.opacity = 0; onRemove(); } }, "×"));
+    c.addEventListener("contextmenu", (e) => { e.preventDefault(); tip.style.opacity = 0; onRemove(); });
+  }
+  return c;
+}
+
+// ===================================================================== picker
+function makePicker(mount, layout) {
+  const st = {
+    mode: "solid",
+    tab: "solid",
+    color: fromHex("#8b7bff"),
+    g: gradFromHexes(["#0F2540", "#8B81C3", "#FEDFE1"], "Yozakura"),
+    customOpen: false,
+  };
+  const out = document.getElementById(mount.id + "-out");
+  out.onclick = () => navigator.clipboard?.writeText(out.textContent);
+  const value = () => (st.mode === "solid" ? cssOf(st.color) : gradientCss(st.g));
+  const compact = layout === "C";
+
+  const cp = el("div", { class: "cp" + (compact ? " compact" : "") });
+  mount.append(cp);
+
+  const solidEd = colorEditor({ get: () => st.color, set: (c) => { st.color = c; emit(); }, compact });
+  const gradEd = gradientEditor({ getG: () => st.g, onChange: (light, dragging) => { if (dragging) { emit(); return; } light ? (gradEd.syncLight(), emit()) : render(); }, compact });
+
+  function setSolid(hsv) { st.color = { ...hsv }; st.mode = "solid"; if (layout === "A") st.tab = "solid"; render(); }
+  function setGradient(g) { st.g = cloneG(g); st.g.sel = 0; st.mode = "gradient"; if (layout === "A") st.tab = "gradient"; render(); }
+
+  function markSelected() {
+    const hex = st.mode === "solid" ? rgbHex(hsvToRgb(st.color)) : null;
+    cp.querySelectorAll(".dot").forEach((d) => d.classList.toggle("on", d.dataset.hex === hex));
+  }
+  function emit() {
+    markSelected();
+    out.textContent = value();
+    if (bigPreview) bigPreview.firstChild.style.background = value();
+  }
+
+  // ----- collection sections
+  const savedSection = (filter) => {
+    const s = section("Saved", null, null, (body) => {
+      // Saved stays short, so it never scrolls; without a scroll container nothing clips the × badges.
+      body.classList.add("free");
+      // Saved stays short, so it never scrolls; without a scroll container nothing clips the × badges.
+      body.classList.add("free");
+      const items = saved.items.filter((i) => !filter || i.kind === filter);
+      const grid = el("div", { class: "chips" + (filter === "gradient" ? " g" : "") });
+      for (const item of items) {
+        const bg = item.kind === "solid" ? item.hex : gradientCss(item.g);
+        grid.append(chip(bg, {
+          tipText: item.kind === "solid" ? item.hex.toUpperCase() : item.g.name ?? "Gradient",
+          onClick: () => (item.kind === "solid" ? setSolid(fromHex(item.hex)) : setGradient(item.g)),
+          onRemove: () => saved.remove(item),
+        }));
+      }
+      const add = el("div", { class: "chip add", html: ICON.plus });
+      withTip(add, st.mode === "solid" || filter === "solid" ? "Save current color" : "Save current gradient");
+      add.onclick = () => {
+        tip.style.opacity = 0;
+        if (filter === "gradient" || (!filter && st.mode === "gradient")) saved.add({ kind: "gradient", g: { ...cloneG(st.g), name: "Saved" } });
+        else saved.add({ kind: "solid", hex: cssOf(st.color) });
+      };
+      grid.append(add);
+      body.append(grid);
+    }, true);
+    saved.subs.add(() => s.rebuild());
+    return s;
+  };
+  const pickHex = (h) => (st.mode === "gradient" && layout !== "A" ? (st.g.stops[st.g.sel].color = fromHex(h), render()) : setSolid(fromHex(h)));
+  const dot = (hex, tipText) => {
+    const light = rgbToOklch(parseHex(hex).rgb)[0] > 0.9;
+    return withTip(el("button", { class: "dot" + (light ? " light" : ""), "data-hex": hex.toLowerCase(), style: { "--c": hex }, onclick: () => pickHex(hex) }), tipText);
+  };
+  const classicRow = () => el("div", { class: "dots" }, CLASSIC.map(([n, h]) => dot(h, `${n} · ${h}`)));
+  const wairoByHue = (open) => section("Traditional colors", WAIRO.length, "日本の伝統色", (body) => {
+    // Each traditional color joins the classic hue it is closest to (OKLCH hue), lightest first,
+    // so a column reads as tints and shades of the swatch above it.
+    const hues = CLASSIC.map(([, h]) => rgbToOklch(parseHex(h).rgb)[2]);
+    const cols = CLASSIC.map(() => []);
+    const neutrals = [];
+    for (const c of WAIRO) {
+      const [L, C, H] = rgbToOklch(parseHex(c[2]).rgb);
+      if (C < 0.025) { neutrals.push([L, c]); continue; }
+      const dist = (a) => Math.min(Math.abs(a - H), 360 - Math.abs(a - H));
+      const k = hues.reduce((best, h, i) => (dist(h) < dist(hues[best]) ? i : best), 0);
+      cols[k].push([L, c]);
+    }
+    cols.forEach((col) => col.sort((a, b) => b[0] - a[0]));
+    const rows = Math.max(...cols.map((c) => c.length));
+    const grid = el("div", { class: "dots" });
+    for (let r = 0; r < rows; r++) for (const col of cols) {
+      const item = col[r];
+      grid.append(item ? dot(item[1][2], item[1][2]) : el("span"));
+    }
+    neutrals.sort((a, b) => b[0] - a[0]);
+    body.append(grid, el("div", { class: "dots-label" }, "Neutrals"), el("div", { class: "dots" }, neutrals.map(([, c]) => dot(c[2], c[2]))));
+    markSelected();
+  }, open);
+  const wairoSection = (open) => section("Traditional colors", WAIRO.length, "日本の伝統色", (body) => {
+    body.append(el("div", { class: "chips" }, WAIRO.map(([n, k, h]) => chip(h, { tipText: h, onClick: () => (st.mode === "gradient" && layout !== "A" ? (st.g.stops[st.g.sel].color = fromHex(h), render()) : setSolid(fromHex(h))) }))));
+  }, open);
+  const waGradSection = (open) => section("Japanese gradients", WAGRAD.length, "和", (body) => {
+    body.append(el("div", { class: "chips g" }, WAGRAD.map(([n, k, hs]) => {
+      const g = gradFromHexes(hs, n);
+      return chip(gradientCss(g), { tipText: `${n} ${k}`, label: k, onClick: () => setGradient(g) });
+    })));
+  }, open);
+  const uigSection = () => section("uiGradients", UIG.length, null, (body) => {
+    const search = el("input", { class: "search", placeholder: "Search 382 gradients…" });
+    const grid = el("div", { class: "chips g" });
+    const fill = () => grid.replaceChildren(...UIG.filter(([n]) => n.toLowerCase().includes(search.value.toLowerCase())).map(([n, cs]) => {
+      const g = gradFromHexes(cs, n);
+      return chip(gradientCss(g), { tipText: n, onClick: () => setGradient(g) });
+    }));
+    search.oninput = fill;
+    fill();
+    body.append(search, grid);
+  });
+  const wadaSection = () => section("Wada combinations", WADA.k.length, "配色事典", (body) => {
+    const list = el("div", { class: "combos" });
+    WADA.k.forEach((idxs, n) => {
+      const strip = el("div", { class: "strip" }, idxs.map((i) => {
+        const [name, hex] = WADA.c[i];
+        return withTip(el("i", { style: { background: hex }, onclick: () => (st.mode === "gradient" && layout !== "A" ? (st.g.stops[st.g.sel].color = fromHex(hex), render()) : setSolid(fromHex(hex))) }), `${name} · ${hex}`);
+      }));
+      list.append(el("div", { class: "combo" },
+        el("span", { class: "no" }, String(n + 1)), strip,
+        withTip(el("button", { onclick: () => setGradient(gradFromHexes(idxs.map((i) => WADA.c[i][1]), `Wada ${n + 1}`)) }, "⇢"), "Use as gradient")));
+    });
+    body.append(list);
+  });
+
+  // ----- layouts
+  let bigPreview = null;
+  const sections = {};
+  function render() {
+    cp.replaceChildren();
+    if (layout === "A") {
+      const tabs = el("div", { class: "tabs" }, [["solid", "Solid", ICON.solid], ["gradient", "Gradient", ICON.grad], ["library", "Library", ICON.lib]].map(([id, l, ic]) =>
+        el("button", { class: "tab" + (st.tab === id ? " on" : ""), html: ic + l, onclick: () => { st.tab = id; if (id !== "library") st.mode = id; render(); } })));
+      cp.append(tabs);
+      if (!sections.classic) solidEd.insertBefore(sections.classic = classicRow(), solidEd.children[2]);
+      if (st.tab === "solid") cp.append(solidEd, sections.saveSolid ??= savedSection("solid"), sections.wairo ??= wairoByHue(true));
+      if (st.tab === "gradient") cp.append(gradEd, sections.saveGrad ??= savedSection("gradient"), sections.wagrad ??= waGradSection(false));
+      if (st.tab === "library") cp.append(sections.wagradL ??= waGradSection(true), sections.wairoL ??= wairoSection(false), sections.wada ??= wadaSection(), sections.uig ??= uigSection());
+    } else if (layout === "B") {
+      cp.append(el("div", { class: "seg", style: { alignSelf: "stretch" } }, ["solid", "gradient"].map((m) =>
+        el("button", { class: st.mode === m ? "on" : "", style: { flex: 1 }, onclick: () => { st.mode = m; render(); } }, m[0].toUpperCase() + m.slice(1)))));
+      cp.append(st.mode === "solid" ? solidEd : gradEd);
+      cp.append(sections.saved ??= savedSection(null), sections.wagrad ??= waGradSection(false), sections.wairo ??= wairoSection(false), sections.wada ??= wadaSection(), sections.uig ??= uigSection());
+    } else {
+      cp.append(el("div", { class: "tabs" }, [["solid", ICON.solid, "Solid"], ["gradient", ICON.grad, "Gradient"], ["library", ICON.lib, "Library"]].map(([id, ic, l]) =>
+        withTip(el("button", { class: "tab" + (st.tab === id ? " on" : ""), html: ic, onclick: () => { st.tab = id; if (id !== "library") st.mode = id; render(); } }), l))));
+      bigPreview = el("div", { class: "preview-big" }, el("i"));
+      if (st.tab !== "library") cp.append(bigPreview);
+      if (st.tab === "solid") {
+        cp.append(sections.saveSolid ??= savedSection("solid"), sections.wairo ??= wairoSection(true));
+      } else if (st.tab === "gradient") {
+        cp.append(sections.saveGrad ??= savedSection("gradient"), sections.wagrad ??= waGradSection(true));
+      } else {
+        cp.append(sections.wada ??= wadaSection(), sections.uig ??= uigSection());
+      }
+      if (st.tab !== "library") {
+        const t = el("button", { class: "custom-toggle" + (st.customOpen ? " open" : ""), html: ICON.chev + "Custom", onclick: () => { st.customOpen = !st.customOpen; render(); } });
+        cp.append(el("div", { class: "sect" }, t));
+        if (st.customOpen) cp.append(st.tab === "solid" ? solidEd : gradEd);
+      }
+    }
+    Object.values(sections).forEach((s) => s.rebuild?.());
+    solidEd.sync();
+    gradEd.sync();
+    emit();
+  }
+  render();
+}
+
+makePicker(document.getElementById("A"), "A");
+makePicker(document.getElementById("B"), "B");
+makePicker(document.getElementById("C"), "C");
+
+// ===================================================================== feature checklist
+const GROUPS = [
+  ["Core", [
+    ["scrub", "Scrub fields with pointer lock", "drag a number, Shift ×10 / Alt ×0.1, click to type", true],
+    ["fmt", "HEX / OKLCH / RGB format toggle", "one button cycles; choice is remembered", true],
+    ["alpha", "Alpha slider + field", "", true],
+    ["eye", "Eyedropper", "Chromium only; hidden elsewhere", true],
+    ["p3", "Display-P3 gamut", "wider colors on modern screens (dialkit has this)", false],
+    ["contrast", "Contrast badge", "WCAG/APCA against a chosen background", false],
+  ]],
+  ["Gradient", [
+    ["grad", "Gradient tab", "value becomes a CSS gradient string", true],
+    ["gtypes", "Linear / radial / conic", "", true],
+    ["ginterp", "Blend space (sRGB / OKLab / OKLCH)", "OKLab avoids muddy middles", true],
+    ["gstops", "Stop editing", "click to add, drag to move, drag off / Delete to remove", true],
+    ["gangle", "Angle scrub field", "", true],
+  ]],
+  ["Library", [
+    ["saved", "Saved colors + gradients", "+ to save, × or right-click to remove; persisted", true],
+    ["wagrad", "和 Japanese gradients (28)", "", true],
+    ["wairo", "Traditional Japanese colors (40)", "", true],
+    ["wada", "Wada · Dictionary of Color Combinations (348)", "the Japanese book; click a color or use a combo as a gradient", true],
+    ["uig", "uiGradients (382, searchable)", "", true],
+    ["custom", "User collections via config", "e.g. pass your brand palette as swatches", false],
+    ["optin", "Ship collections as opt-in import", "keeps the core bundle small", false],
+  ]],
+];
+const groupsEl = document.getElementById("groups");
+const summary = document.getElementById("summary");
+const layoutPick = el("select", { style: { background: "#161616", color: "#fff", border: "1px solid #333", borderRadius: "6px", padding: "3px 6px", font: "12px system-ui" } },
+  ["A · Tabs", "B · One sheet", "C · Swatches first"].map((l) => el("option", {}, l)));
+groupsEl.before(el("p", { style: { marginBottom: "12px", display: "flex", gap: "8px", alignItems: "center" } }, "Layout:", layoutPick));
+for (const [title, items] of GROUPS) {
+  groupsEl.append(el("div", { class: "group" }, el("h3", {}, title), items.map(([id, l, d, on]) =>
+    el("label", {}, el("input", { type: "checkbox", "data-id": id, ...(on ? { checked: "" } : {}) }), el("div", {}, l, d ? el("small", {}, d) : null)))));
+}
+function updateSummary() {
+  const picked = [...groupsEl.querySelectorAll("input:checked")].map((i) => i.closest("label").firstChild.nextSibling.firstChild.textContent);
+  summary.textContent = `Layout: ${layoutPick.value}\nFeatures: ${picked.join("; ")}`;
+}
+groupsEl.addEventListener("change", updateSummary);
+layoutPick.addEventListener("change", updateSummary);
+summary.onclick = () => navigator.clipboard?.writeText(summary.textContent);
+summary.style.whiteSpace = "pre-wrap";
+updateSummary();
+</script>
+</body>
+</html>

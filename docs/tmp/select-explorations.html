@@ -1,0 +1,308 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>uipane · select explorations</title>
+<style>
+  :root {
+    --bg: #0a0a0a; --surface: #141414; --surface-hover: #1a1a1a; --surface-active: #1e1e1e;
+    --border: #1e1e1e; --border-hover: #2a2a2a; --t1: #fff; --t2: #d4d4d4; --t3: #a3a3a3; --t4: #737373;
+    --accent: #8b7bff; --r: 8px; --row: 36px;
+  }
+  * { box-sizing: border-box; margin: 0; }
+  body { background: #050505; color: var(--t2); font: 13px/1.4 system-ui, -apple-system, sans-serif; padding: 40px 32px 80px; -webkit-font-smoothing: antialiased; }
+  header { max-width: 1180px; margin: 0 auto 28px; }
+  h1 { font-size: 18px; color: var(--t1); font-weight: 600; margin-bottom: 6px; }
+  header p { color: var(--t3); max-width: 760px; text-wrap: pretty; }
+  .grid { max-width: 1180px; margin: 0 auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 16px; }
+  .card { background: var(--bg); border: 1px solid var(--border); border-radius: 14px; padding: 14px; display: flex; flex-direction: column; gap: 10px; }
+  .card h2 { font-size: 13px; color: var(--t1); font-weight: 600; display: flex; gap: 8px; align-items: center; }
+  .tag { font-size: 10px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--t4); border: 1px solid var(--border-hover); border-radius: 4px; padding: 1px 5px; }
+  .tag.rec { color: var(--accent); border-color: #3a3270; }
+  .card p { color: var(--t3); font-size: 12px; text-wrap: pretty; }
+  .card kbd { font: 11px ui-monospace, monospace; background: var(--surface-active); border: 1px solid var(--border-hover); border-radius: 4px; padding: 0 4px; color: var(--t2); }
+
+  /* stage: ball animated by the selected easing */
+  .stage { position: relative; height: 56px; background: var(--surface); border-radius: var(--r); overflow: hidden; }
+  .stage::before { content: ""; position: absolute; left: 22px; right: 22px; top: 50%; border-top: 1px dashed #2a2a2a; }
+  .ball { position: absolute; top: 50%; left: 12px; width: 20px; height: 20px; margin-top: -10px; border-radius: 50%; background: var(--t1); animation: travel 1.4s infinite alternate; }
+  .stage.previewing .ball { background: var(--accent); box-shadow: 0 0 0 4px #8b7bff33; }
+  .badge { position: absolute; right: 8px; top: 6px; font-size: 10px; color: var(--accent); opacity: 0; transition: opacity .15s; }
+  .stage.previewing .badge { opacity: 1; }
+  @keyframes travel { to { left: calc(100% - 32px); } }
+
+  /* row / trigger — matches uipane's select row */
+  .row { position: relative; display: flex; align-items: center; justify-content: space-between; height: var(--row); padding: 0 12px; background: var(--surface); border: none; border-radius: var(--r); color: var(--t3); font: inherit; font-weight: 500; width: 100%; cursor: pointer; user-select: none; transition: background .15s; }
+  .row:hover, .row.open { background: var(--surface-hover); }
+  .row .val { color: var(--t1); display: flex; align-items: center; gap: 6px; }
+  .chev { width: 12px; height: 12px; color: var(--t4); transition: transform .2s cubic-bezier(0,0,.2,1); }
+  .row.open .chev { transform: rotate(180deg); }
+
+  .menu { position: absolute; left: 0; right: 0; top: calc(100% + 4px); z-index: 10; display: flex; flex-direction: column; padding: 4px; background: #1a1a1a; border: 1px solid var(--border-hover); border-radius: var(--r); box-shadow: 0 8px 24px rgba(0,0,0,.5); animation: menu-in .15s cubic-bezier(0,0,.2,1); }
+  @keyframes menu-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } }
+  .opt { display: flex; justify-content: space-between; align-items: center; padding: 7px 10px; border-radius: 6px; color: var(--t3); font-weight: 500; cursor: pointer; }
+  .opt:hover, .opt.hl { background: var(--surface-hover); color: var(--t2); }
+  .opt.sel { color: var(--t1); background: var(--surface-active); }
+  .opt .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--accent); opacity: 0; }
+  .opt.sel .dot { opacity: 1; }
+  .menu-head { display: flex; justify-content: space-between; align-items: center; padding: 4px 6px 6px 10px; color: var(--t4); font-size: 11px; }
+  .pin { border: none; background: none; color: var(--t4); cursor: pointer; padding: 3px 5px; border-radius: 4px; font: inherit; font-size: 11px; }
+  .pin[aria-pressed="true"] { color: var(--accent); background: #8b7bff1a; }
+
+  /* C: stepper */
+  .step { display: grid; place-items: center; width: 24px; height: 24px; border: none; border-radius: 6px; background: transparent; color: var(--t4); cursor: pointer; font-size: 14px; }
+  .step:hover { background: var(--surface-active); color: var(--t1); }
+  .dots { display: flex; gap: 3px; }
+  .dots i { width: 4px; height: 4px; border-radius: 50%; background: #333; transition: background .15s, transform .15s; }
+  .dots i.on { background: var(--t1); transform: scale(1.25); }
+
+  /* D: chips */
+  .chips-row { background: var(--surface); border-radius: var(--r); padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; }
+  .chips-row .lbl { color: var(--t3); font-weight: 500; }
+  .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+  .chip { border: 1px solid var(--border-hover); background: transparent; color: var(--t3); font: inherit; font-size: 12px; font-weight: 500; padding: 4px 9px; border-radius: 999px; cursor: pointer; transition: background .12s, color .12s, border-color .12s; }
+  .chip:hover { color: var(--t1); border-color: #3a3a3a; }
+  .chip.sel { background: var(--t1); color: #000; border-color: var(--t1); }
+
+  /* E: scrub */
+  .row.scrub { cursor: ew-resize; touch-action: none; }
+  .row.scrubbing { background: var(--surface-active); }
+  .ticks { position: absolute; left: 12px; right: 12px; bottom: 4px; display: flex; justify-content: space-between; opacity: 0; transition: opacity .15s; pointer-events: none; }
+  .row.scrub:hover .ticks, .row.scrubbing .ticks { opacity: 1; }
+  .ticks i { width: 2px; height: 3px; border-radius: 1px; background: #333; }
+  .ticks i.on { background: var(--accent); height: 5px; margin-top: -2px; }
+
+  .foot { max-width: 1180px; margin: 28px auto 0; color: var(--t3); }
+  .foot h3 { color: var(--t1); font-size: 13px; margin-bottom: 6px; }
+  .foot li { margin: 4px 0 4px 18px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Select — exploring options without the open → pick → closed loop</h1>
+  <p>Each card drives the ball's easing. The options are things you want to <em>compare</em>, so the question is how fast you can flip between them and see the result. <strong>A</strong> is today's uipane select; the rest are alternatives. Accent ball = previewing (not committed yet).</p>
+</header>
+
+<div class="grid" id="grid"></div>
+
+<div class="foot">
+  <h3>Recommendation</h3>
+  <ul>
+    <li><strong>B + C together as the default select:</strong> the menu previews on hover/arrow keys (commit on click/Enter, revert on Esc or leaving the menu), and the closed trigger cycles with wheel, <kbd>←</kbd>/<kbd>→</kbd> while hovered, and ‹ › buttons. Browsing works in both states, and a single click still means "pick".</li>
+    <li><strong>D automatically when there are ≤ 4 short options</strong> (or via <code>{ display: "chips" }</code>). There's no menu to open at all.</li>
+    <li>E (scrub) fits uipane's drag-everything feel, but it can't be discovered by looking at it. Ship it as a modifier of C, not on its own.</li>
+    <li>F (pin) only helps with long lists, and B covers the same need with less UI.</li>
+  </ul>
+</div>
+
+<script>
+const EASINGS = [
+  ["linear", "linear"],
+  ["ease-in", "cubic-bezier(.4,0,1,1)"],
+  ["ease-out", "cubic-bezier(0,0,.2,1)"],
+  ["ease-in-out", "cubic-bezier(.4,0,.2,1)"],
+  ["back-out", "cubic-bezier(.34,1.56,.64,1)"],
+  ["anticipate", "cubic-bezier(.68,-.6,.32,1.6)"],
+  ["steps", "steps(6, jump-none)"],
+];
+const CHEV = '<svg class="chev" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9.5L12 15.5L18 9.5"/></svg>';
+const h = (html) => { const t = document.createElement("template"); t.innerHTML = html.trim(); return t.content.firstElementChild; };
+
+/** Shared model: committed value + optional transient preview, rendered into a stage. */
+function model(stage, onChange) {
+  let committed = 2, preview = null;
+  const ball = stage.querySelector(".ball");
+  const render = () => {
+    const i = preview ?? committed;
+    ball.style.animationTimingFunction = EASINGS[i][1];
+    stage.classList.toggle("previewing", preview !== null && preview !== committed);
+    stage.querySelector(".badge").textContent = preview !== null && preview !== committed ? `previewing ${EASINGS[preview][0]}` : "";
+    onChange?.();
+  };
+  render();
+  return {
+    get value() { return committed; },
+    get shown() { return preview ?? committed; },
+    commit(i) { committed = (i + EASINGS.length) % EASINGS.length; preview = null; render(); },
+    preview(i) { preview = i; render(); },
+    revert() { preview = null; render(); },
+  };
+}
+
+function card(title, tag, desc) {
+  const el = h(`<section class="card">
+    <h2>${title}${tag ? `<span class="tag ${tag === "recommended" ? "rec" : ""}">${tag}</span>` : ""}</h2>
+    <p>${desc}</p>
+    <div class="stage"><div class="ball"></div><span class="badge"></span></div>
+    <div class="slot"></div>
+  </section>`);
+  document.getElementById("grid").appendChild(el);
+  return { el, stage: el.querySelector(".stage"), slot: el.querySelector(".slot") };
+}
+
+function menu(m, { hoverPreview = false, keepOpen = () => false, onClose, head } = {}) {
+  const el = h(`<div class="menu" role="listbox"></div>`);
+  if (head) el.appendChild(head);
+  let hl = m.value;
+  const items = EASINGS.map(([name], i) => {
+    const o = h(`<div class="opt" role="option"><span>${name}</span><span class="dot"></span></div>`);
+    o.addEventListener("mouseenter", () => { hl = i; paint(); if (hoverPreview) m.preview(i); });
+    o.addEventListener("mousedown", (e) => e.preventDefault());
+    o.addEventListener("click", (e) => { m.commit(i); hl = i; paint(); if (!keepOpen(e)) onClose(); });
+    el.appendChild(o);
+    return o;
+  });
+  if (hoverPreview) el.addEventListener("mouseleave", () => m.revert());
+  const paint = () => items.forEach((o, i) => { o.classList.toggle("sel", i === m.value); o.classList.toggle("hl", i === hl); });
+  paint();
+  return {
+    el, paint,
+    key(e) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        hl = (hl + (e.key === "ArrowDown" ? 1 : -1) + items.length) % items.length;
+        paint(); if (hoverPreview) m.preview(hl);
+      } else if (e.key === "Enter") { e.preventDefault(); m.commit(hl); onClose(); }
+      else if (e.key === "Escape") { m.revert(); onClose(); }
+    },
+  };
+}
+
+/** Trigger row + popover menu, with hooks for each variant. */
+function dropdown(slot, m, opts = {}) {
+  const row = h(`<button class="row" type="button"><span>Easing</span><span class="val"><span class="v"></span>${opts.extra ?? ""}${CHEV}</span></button>`);
+  const wrap = h(`<div style="position:relative"></div>`);
+  wrap.appendChild(row); slot.appendChild(wrap);
+  let open = null;
+  const sync = () => { row.querySelector(".v").textContent = EASINGS[m.shown][0]; open?.paint(); opts.sync?.(row); };
+  const close = () => { if (!open) return; open.el.remove(); open = null; row.classList.remove("open"); m.revert(); sync(); };
+  const show = () => {
+    if (open) return close();
+    open = menu(m, { ...opts, onClose: close });
+    wrap.appendChild(open.el); row.classList.add("open");
+  };
+  row.addEventListener("click", (e) => { if (opts.onTriggerClick?.(e) === false) return; show(); });
+  row.addEventListener("keydown", (e) => {
+    if (open) return open.key(e);
+    if (e.key === "ArrowDown" || e.key === "Enter" || e.key === " ") { e.preventDefault(); show(); }
+  });
+  document.addEventListener("mousedown", (e) => { if (open && !wrap.contains(e.target)) close(); });
+  return { row, sync, close, isOpen: () => !!open };
+}
+
+// A — current behaviour
+{
+  const c = card("A · Current", "before", "Click to open, click an option, and the menu closes. Comparing two easings takes four clicks, and you only see each one after committing it.");
+  let d; const m = model(c.stage, () => d?.sync()); d = dropdown(c.slot, m); d.sync();
+}
+
+// B — hover preview
+{
+  const c = card("B · Live preview in the menu", "recommended", "Hovering an option (or pressing <kbd>↑</kbd>/<kbd>↓</kbd>) applies it immediately. Click or <kbd>Enter</kbd> commits; <kbd>Esc</kbd> or moving off the menu reverts. Sweep the pointer down the list to compare everything in one pass.");
+  let d; const m = model(c.stage, () => d?.sync()); d = dropdown(c.slot, m, { hoverPreview: true }); d.sync();
+}
+
+// C — cycle on the closed trigger
+{
+  const c = card("C · Cycle without opening", "recommended", "‹ › buttons, mouse wheel over the row, or <kbd>←</kbd>/<kbd>→</kbd> while hovering all step through the options and commit right away. Dots show your position. Clicking the label still opens the menu.");
+  let d;
+  const m = model(c.stage, () => d?.sync());
+  const dots = `<span class="dots">${EASINGS.map(() => "<i></i>").join("")}</span>`;
+  d = dropdown(c.slot, m, {
+    extra: `<span class="step" data-d="-1">‹</span>${dots}<span class="step" data-d="1">›</span>`,
+    sync: (row) => row.querySelectorAll(".dots i").forEach((dot, i) => dot.classList.toggle("on", i === m.value)),
+    onTriggerClick: (e) => {
+      const s = e.target.closest(".step");
+      if (s) { d.close(); m.commit(m.value + Number(s.dataset.d)); return false; }
+    },
+  });
+  let hovering = false, lastWheel = 0;
+  d.row.addEventListener("mouseenter", () => (hovering = true));
+  d.row.addEventListener("mouseleave", () => (hovering = false));
+  d.row.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    const now = performance.now();
+    if (now - lastWheel < 90 || Math.abs(e.deltaY) < 2) return;
+    lastWheel = now; m.commit(m.value + Math.sign(e.deltaY));
+  }, { passive: false });
+  document.addEventListener("keydown", (e) => {
+    if (!hovering || d.isOpen() || (e.key !== "ArrowLeft" && e.key !== "ArrowRight")) return;
+    e.preventDefault(); m.commit(m.value + (e.key === "ArrowRight" ? 1 : -1));
+  });
+  d.sync();
+}
+
+// D — chips
+{
+  const c = card("D · Inline chips", "", "Every option is visible, so one click picks it and hovering previews it. Best for 2–4 short options; with 7, as here, it starts to crowd the row.");
+  let m;
+  const row = h(`<div class="chips-row"><span class="lbl">Easing</span><div class="chips"></div></div>`);
+  c.slot.appendChild(row);
+  const chips = EASINGS.map(([name], i) => {
+    const b = h(`<button class="chip" type="button">${name}</button>`);
+    b.addEventListener("mouseenter", () => m.preview(i));
+    b.addEventListener("mouseleave", () => m.revert());
+    b.addEventListener("click", () => m.commit(i));
+    row.querySelector(".chips").appendChild(b);
+    return b;
+  });
+  m = model(c.stage, () => m && chips.forEach((b, i) => b.classList.toggle("sel", i === m.value)));
+  chips.forEach((b, i) => b.classList.toggle("sel", i === m.value));
+}
+
+// E — scrub
+{
+  const c = card("E · Scrub the trigger", "", "Press the row and drag sideways: options step every 28px, and you see each one live while dragging. Releasing commits; a plain click opens the menu. Same gesture as uipane's sliders.");
+  let d;
+  const m = model(c.stage, () => d?.sync());
+  const ticks = `<span class="ticks">${EASINGS.map(() => "<i></i>").join("")}</span>`;
+  let dragged = false;
+  d = dropdown(c.slot, m, {
+    extra: ticks,
+    sync: (row) => row.querySelectorAll(".ticks i").forEach((t, i) => t.classList.toggle("on", i === m.shown)),
+    onTriggerClick: () => { if (dragged) { dragged = false; return false; } },
+  });
+  d.row.classList.add("scrub");
+  d.row.addEventListener("pointerdown", (e) => {
+    if (d.isOpen()) return;
+    const x0 = e.clientX, start = m.value;
+    d.row.setPointerCapture(e.pointerId);
+    const move = (ev) => {
+      const dx = ev.clientX - x0;
+      if (Math.abs(dx) > 3) { dragged = true; d.row.classList.add("scrubbing"); }
+      if (!dragged) return;
+      const i = Math.max(0, Math.min(EASINGS.length - 1, start + Math.round(dx / 28)));
+      m.preview(i); d.sync();
+    };
+    const up = () => {
+      d.row.removeEventListener("pointermove", move); d.row.removeEventListener("pointerup", up);
+      d.row.classList.remove("scrubbing");
+      if (dragged) m.commit(m.shown);
+    };
+    d.row.addEventListener("pointermove", move); d.row.addEventListener("pointerup", up);
+  });
+  d.sync();
+}
+
+// F — pinned menu
+{
+  const c = card("F · Pin the menu open", "", "A pin in the menu header keeps it open after each pick (or <kbd>Alt</kbd>-click once). Good for long lists, but it's one more control to learn, and B covers most of the same need.");
+  let d;
+  const m = model(c.stage, () => d?.sync());
+  let pinned = false;
+  const head = () => {
+    const el = h(`<div class="menu-head"><span>Easing</span><button class="pin" type="button" aria-pressed="${pinned}">📌 pin</button></div>`);
+    const b = el.querySelector(".pin");
+    b.addEventListener("mousedown", (e) => e.preventDefault());
+    b.addEventListener("click", () => { pinned = !pinned; b.setAttribute("aria-pressed", String(pinned)); });
+    return el;
+  };
+  const wrapOpts = { keepOpen: (e) => pinned || e.altKey };
+  Object.defineProperty(wrapOpts, "head", { get: head, enumerable: true });
+  d = dropdown(c.slot, m, wrapOpts);
+  d.sync();
+}
+</script>
+</body>
+</html>

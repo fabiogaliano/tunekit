@@ -1,3 +1,4 @@
+import { createPortal } from "preact/compat";
 import { useCallback, useEffect, useRef, useState } from "preact/hooks";
 import { PaneStore } from "../store.ts";
 import type { Preset as PresetType } from "../types.ts";
@@ -6,9 +7,10 @@ type PresetBarProps = {
   panelId: string;
   presets: PresetType[];
   activePresetId: string | null;
+  portalContainer: HTMLElement | null;
 };
 
-export function PresetBar({ panelId, presets, activePresetId }: PresetBarProps) {
+export function PresetBar({ panelId, presets, activePresetId, portalContainer }: PresetBarProps) {
   const [isOpen, setIsOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -33,8 +35,13 @@ export function PresetBar({ panelId, presets, activePresetId }: PresetBarProps) 
   useEffect(() => {
     if (!isOpen) return;
     const handler = (e: MouseEvent) => {
-      const t = e.target as Node;
-      if (triggerRef.current?.contains(t) || dropdownRef.current?.contains(t)) return;
+      // At document level e.target is retargeted to the shadow host, so look
+      // at the composed path to see where the press actually landed.
+      const path = e.composedPath();
+      if (
+        (triggerRef.current && path.includes(triggerRef.current)) ||
+        (dropdownRef.current && path.includes(dropdownRef.current))
+      ) return;
       close();
     };
     document.addEventListener("mousedown", handler);
@@ -56,11 +63,16 @@ export function PresetBar({ panelId, presets, activePresetId }: PresetBarProps) 
   }, [panelId, presets.length]);
 
   const handleCopy = useCallback(() => {
-    const values = PaneStore.getValues(panelId);
     const panel = PaneStore.getPanel(panelId);
-    const json = JSON.stringify(values, null, 2);
-    const text = `Update the usePane configuration for "${panel?.name ?? panelId}" with these values:\n\n\`\`\`json\n${json}\n\`\`\`\n\nApply these values as the new defaults in the usePane call.`;
-    navigator.clipboard.writeText(text);
+    const changed = PaneStore.getChangedValues(panelId);
+    // Only what was tuned: unchanged values are noise the agent would re-apply as no-ops.
+    const hasChanges = Object.keys(changed).length > 0;
+    const json = JSON.stringify(hasChanges ? changed : PaneStore.getTunableValues(panelId), null, 2);
+    const where = panel?.source ? ` in ${panel.source}` : "";
+    const text = hasChanges
+      ? `Update the usePane configuration for "${panel?.name ?? panelId}"${where} with these values:\n\n\`\`\`json\n${json}\n\`\`\`\n\nApply these values as the new defaults in the usePane call. Keys are dot-paths into the config; controls not listed are unchanged.`
+      : `The usePane configuration for "${panel?.name ?? panelId}"${where} is at its defaults:\n\n\`\`\`json\n${json}\n\`\`\``;
+    navigator.clipboard.writeText(text).catch(() => {});
   }, [panelId]);
 
   return (
@@ -99,11 +111,11 @@ export function PresetBar({ panelId, presets, activePresetId }: PresetBarProps) 
         </svg>
       </button>
 
-      {isOpen && (
+      {isOpen && portalContainer && createPortal(
         <div
           ref={dropdownRef}
           class="up-preset-dropdown"
-          style={{ position: "fixed", top: `${pos.top}px`, left: `${pos.left}px`, minWidth: `${pos.width}px` }}
+          style={{ top: `${pos.top}px`, left: `${pos.left}px`, minWidth: `${pos.width}px` }}
         >
           <div
             class={`up-preset-item ${!activePresetId ? "up-preset-item-active" : ""}`}
@@ -132,7 +144,8 @@ export function PresetBar({ panelId, presets, activePresetId }: PresetBarProps) 
               </button>
             </div>
           ))}
-        </div>
+        </div>,
+        portalContainer,
       )}
     </div>
   );

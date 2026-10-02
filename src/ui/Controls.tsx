@@ -1,4 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "preact/hooks";
+import { useLayoutEffect, useRef, useState } from "preact/hooks";
+import { formatToggleShortcut } from "../shortcuts.ts";
+import type { ShortcutConfig } from "../types.ts";
+import { optionKeyIndex } from "../vendor/dialkit/control-keyboard.ts";
 
 // ---------------------------------------------------------------------------
 // Toggle (segmented On/Off)
@@ -8,12 +11,21 @@ type ToggleProps = {
   label: string;
   checked: boolean;
   onChange: (v: boolean) => void;
+  shortcut?: ShortcutConfig;
+  shortcutActive?: boolean;
 };
 
-export function Toggle({ label, checked, onChange }: ToggleProps) {
+export function Toggle({ label, checked, onChange, shortcut, shortcutActive }: ToggleProps) {
   return (
     <div class="up-labeled-row">
-      <span class="up-labeled-row-label">{label}</span>
+      <span class="up-labeled-row-label">
+        {label}
+        {shortcut && (
+          <span class={`dialkit-shortcut-pill${shortcutActive ? " dialkit-shortcut-pill-active" : ""}`}>
+            {formatToggleShortcut(shortcut)}
+          </span>
+        )}
+      </span>
       <SegmentedControl
         options={[
           { value: "off", label: "Off" },
@@ -60,8 +72,20 @@ export function SegmentedControl({
     }
   }, [value]);
 
+  // Roving focus: one tab stop, arrows move and select (radio-group pattern).
+  const onKeyDown = (e: KeyboardEvent) => {
+    if (e.altKey || e.metaKey || e.ctrlKey) return;
+    const index = options.findIndex((o) => o.value === value);
+    const next = optionKeyIndex(e.key, index, options.length, true);
+    if (next === undefined) return;
+    e.preventDefault();
+    const opt = options[next]!;
+    onChange(opt.value);
+    btnRefs.current.get(opt.value)?.focus({ preventScroll: true });
+  };
+
   return (
-    <div ref={containerRef} class="up-seg">
+    <div ref={containerRef} class="up-seg" role="radiogroup" onKeyDown={onKeyDown}>
       {pillStyle && (
         <div
           class="up-seg-pill"
@@ -75,6 +99,9 @@ export function SegmentedControl({
             if (el) btnRefs.current.set(opt.value, el);
           }}
           class={`up-seg-btn ${value === opt.value ? "up-seg-btn-active" : ""}`}
+          role="radio"
+          aria-checked={value === opt.value}
+          tabIndex={value === opt.value ? 0 : -1}
           onClick={() => onChange(opt.value)}
         >
           {opt.label}
@@ -124,82 +151,6 @@ export function TextInput({ label, value, onChange, placeholder }: TextInputProp
         placeholder={placeholder}
         spellcheck={false}
       />
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Color picker
-// ---------------------------------------------------------------------------
-
-type ColorPickerProps = {
-  label: string;
-  value: string;
-  onChange: (v: string) => void;
-};
-
-const HEX_RE = /^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/;
-
-export function ColorPicker({ label, value, onChange }: ColorPickerProps) {
-  const nativeRef = useRef<HTMLInputElement>(null);
-  const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState(value);
-
-  useEffect(() => {
-    if (!editing) setDraft(value);
-  }, [value, editing]);
-
-  const submit = useCallback(() => {
-    setEditing(false);
-    if (HEX_RE.test(draft)) onChange(draft);
-    else setDraft(value);
-  }, [draft, onChange, value]);
-
-  const expandHex = (hex: string) =>
-    hex.length === 4
-      ? `#${hex[1]}${hex[1]}${hex[2]}${hex[2]}${hex[3]}${hex[3]}`
-      : hex;
-
-  return (
-    <div class="up-color-row">
-      <span class="up-color-label">{label}</span>
-      <div class="up-color-inputs">
-        {editing ? (
-          <input
-            type="text"
-            class="up-color-hex-input"
-            value={draft}
-            onInput={(e) => setDraft((e.target as HTMLInputElement).value)}
-            onBlur={submit}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") submit();
-              if (e.key === "Escape") {
-                setEditing(false);
-                setDraft(value);
-              }
-            }}
-            // biome-ignore lint/a11y/noAutofocus: inline edit
-            autoFocus
-          />
-        ) : (
-          <span class="up-color-hex" onClick={() => setEditing(true)}>
-            {(value ?? "").toUpperCase()}
-          </span>
-        )}
-        <button
-          class="up-color-swatch"
-          style={{ backgroundColor: value }}
-          onClick={() => nativeRef.current?.click()}
-          title="Pick color"
-        />
-        <input
-          ref={nativeRef}
-          type="color"
-          class="up-color-native"
-          value={expandHex(value).slice(0, 7)}
-          onInput={(e) => onChange((e.target as HTMLInputElement).value)}
-        />
-      </div>
     </div>
   );
 }
