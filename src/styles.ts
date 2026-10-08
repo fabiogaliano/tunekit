@@ -62,6 +62,26 @@ export const STYLES = /* css */ `
   transition: none !important;
 }
 
+/* Inside a caller's element: flow as a block and let the host scroll. */
+.up-shell-hosted {
+  position: relative;
+  z-index: auto;
+  width: 100%;
+  max-height: none;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  transition: none;
+}
+
+.up-shell-hosted .up-header,
+.up-shell-hosted .up-header:active { cursor: default; }
+
+.up-shell-hosted .up-content {
+  overflow: visible;
+  flex: none;
+}
+
 .up-content {
   overflow-y: auto;
   overflow-x: hidden;

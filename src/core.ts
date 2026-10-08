@@ -1,0 +1,40 @@
+// React-free entry: the root entry imports react for its hooks, which a
+// non-React host (Solid, vanilla) would otherwise have to install.
+export { PaneStore } from "./store.ts";
+export { initPane, type InitPaneOptions } from "./mount.ts";
+export type { PaneLayout } from "./ui/App.tsx";
+export type {
+  SliderConfig,
+  ToggleConfig,
+  ActionConfig,
+  SlotConfig,
+  SelectConfig,
+  SelectOption,
+  ColorConfig,
+  TextConfig,
+  SpringConfig,
+  EasingConfig,
+  FolderConfig,
+  ControlConfig,
+  PaneConfig,
+  ResolvedValues,
+  TransitionValue,
+  PaneValue,
+  PanelState,
+  Preset,
+  PresetFile,
+  PresetWriter,
+  Corner,
+  ControlMeta,
+  ControlType,
+  ControlInput,
+  SliderTuple,
+  ImageConfig,
+  ImageOption,
+  PadConfig,
+  PadAxis,
+  PadValue,
+  ShortcutConfig,
+  PersistOptions,
+  PanelOptions,
+} from "./types.ts";

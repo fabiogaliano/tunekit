@@ -13,6 +13,11 @@ import { PaneStore } from "../store.ts";
 
 export type ActiveShortcut = { panelId: string; path: string } | null;
 
+// Shortcuts act on the shared PaneStore, so with a floating and a hosted pane
+// mounted at once every press would apply twice. The earliest-mounted pane
+// handles them; when it unmounts the next one takes over.
+const mounted: object[] = [];
+
 /** Window-level shortcut handling (dialkit's ShortcutListener, as a hook). */
 export function useShortcuts(): ActiveShortcut {
   const [active, setActive] = useState<ActiveShortcut>(null);
@@ -22,6 +27,10 @@ export function useShortcuts(): ActiveShortcut {
   const acc = useRef(0);
 
   useEffect(() => {
+    const self = {};
+    mounted.push(self);
+    const owns = () => mounted[0] === self;
+
     const resetPointer = () => {
       dragging.current = false;
       lastX.current = null;
@@ -41,6 +50,7 @@ export function useShortcuts(): ActiveShortcut {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      if (!owns()) return;
       if (isInputFocused()) return;
       const key = e.key.toLowerCase();
 
@@ -71,6 +81,7 @@ export function useShortcuts(): ActiveShortcut {
     };
 
     const onKeyUp = (e: KeyboardEvent) => {
+      if (!owns()) return;
       keys.current.delete(e.key.toLowerCase());
       resetPointer();
       let next: ActiveShortcut = null;
@@ -85,6 +96,7 @@ export function useShortcuts(): ActiveShortcut {
     };
 
     const onWheel = (e: WheelEvent) => {
+      if (!owns()) return;
       if (isInputFocused()) return;
       const modifier = getActiveModifier(e);
       for (const key of keys.current) {
@@ -102,6 +114,7 @@ export function useShortcuts(): ActiveShortcut {
     };
 
     const onMouseDown = (e: MouseEvent) => {
+      if (!owns()) return;
       if (isInputFocused() || keys.current.size === 0) return;
       if (resolveHeldTarget(keys.current, "drag")) {
         dragging.current = true;
@@ -112,6 +125,7 @@ export function useShortcuts(): ActiveShortcut {
     };
 
     const onMouseMove = (e: MouseEvent) => {
+      if (!owns()) return;
       if (isInputFocused() || keys.current.size === 0) return;
       const interaction = dragging.current ? "drag" : "move";
       if (lastX.current === null) {
@@ -137,6 +151,7 @@ export function useShortcuts(): ActiveShortcut {
     window.addEventListener("mousemove", onMouseMove);
     window.addEventListener("blur", onBlur);
     return () => {
+      mounted.splice(mounted.indexOf(self), 1);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("wheel", onWheel);

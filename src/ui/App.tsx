@@ -96,9 +96,11 @@ type AppProps = {
   portalContainer: HTMLElement | null;
   childrenSlot: HTMLDivElement | null;
   defaultLayout?: PaneLayout;
+  /** Rendered inside a caller's element: no floating geometry, docking or saved position. */
+  hosted?: boolean;
 };
 
-export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: AppProps) {
+export function App({ portalContainer, childrenSlot, defaultLayout = "tabs", hosted = false }: AppProps) {
   const adoptSlot = useCallback(
     (el: HTMLDivElement | null) => {
       if (el && childrenSlot && childrenSlot.parentNode !== el) {
@@ -118,8 +120,9 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
 
   // Shell geometry
-  const savedShell = loadLS<ShellState>(LS_KEY);
-  const savedCollapsed = loadLS<CollapsedState>(LS_COLLAPSED_KEY);
+  // A hosted pane must not adopt (or overwrite) the floating pane's saved geometry.
+  const savedShell = hosted ? null : loadLS<ShellState>(LS_KEY);
+  const savedCollapsed = hosted ? null : loadLS<CollapsedState>(LS_COLLAPSED_KEY);
 
   const [corner, setCorner] = useState<Corner>(savedShell?.corner ?? "bottom-right");
   const [width, setWidth] = useState(savedShell?.width ?? 320);
@@ -132,6 +135,7 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
   // fitted into the current viewport, so a smaller window never loses it.
   const [, setViewportTick] = useState(0);
   useEffect(() => {
+    if (hosted) return;
     const onResize = () => setViewportTick((n) => n + 1);
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
@@ -170,10 +174,12 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
 
   // Persist
   useEffect(() => {
+    if (hosted) return;
     saveLS(LS_KEY, { corner, width, height });
   }, [corner, width, height]);
 
   useEffect(() => {
+    if (hosted) return;
     if (collapsed) saveLS(LS_COLLAPSED_KEY, collapsed);
     else {
       try {
@@ -503,6 +509,9 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
   }
 
   // ------- Expanded state -------
+  // Hosted: the caller's element owns placement and scrolling, so the shell
+  // flows in it — no transform, no wheel containment (it would swallow the
+  // host's own scroll), no drag or resize.
   // A single panel has nothing to stack, so it always uses the plain view.
   const stacked = layout === "stack" && panels.length > 1;
 
@@ -518,16 +527,20 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
   return (
     <div
       ref={shellRef}
-      class="up-shell"
-      onWheel={containWheel}
-      style={{
-        width: `${shellW}px`,
-        height: `${shellH}px`,
-        transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
-      }}
+      class={hosted ? "up-shell up-shell-hosted" : "up-shell"}
+      onWheel={hosted ? undefined : containWheel}
+      style={
+        hosted
+          ? undefined
+          : {
+              width: `${shellW}px`,
+              height: `${shellH}px`,
+              transform: `translate3d(${pos.x}px, ${pos.y}px, 0)`,
+            }
+      }
     >
       {/* Header */}
-      <div class="up-header" onPointerDown={handleDrag}>
+      <div class="up-header" onPointerDown={hosted ? undefined : handleDrag}>
         <div class="up-header-left">
           <span class="up-header-title">
             {panels.length === 1 ? currentPanel?.name ?? "tunekit" : "tunekit"}
@@ -598,7 +611,7 @@ export function App({ portalContainer, childrenSlot, defaultLayout = "tabs" }: A
       </div>
 
       {/* Resize handles */}
-      {resizeHandles.map((h) => (
+      {!hosted && resizeHandles.map((h) => (
         <div
           key={h}
           class={`up-resize up-resize-${h}`}

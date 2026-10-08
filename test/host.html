@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>tunekit — hosted pane</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          14px system-ui,
+          sans-serif;
+        background: #f4f4f5;
+        color: #18181b;
+      }
+      main {
+        display: grid;
+        grid-template-columns: 1fr 340px;
+        height: 100vh;
+      }
+      #stage {
+        padding: 32px;
+        display: grid;
+        gap: 24px;
+        align-content: start;
+      }
+      #swatch {
+        width: 160px;
+        height: 160px;
+        transition: border-radius 0.1s;
+      }
+      #values {
+        font:
+          12px ui-monospace,
+          monospace;
+        white-space: pre;
+      }
+      /* A scrolling side panel, like mockpit's Tune mode, to exercise portals inside a scroller. */
+      #panel {
+        overflow-y: auto;
+        background: #0a0a0a;
+      }
+      #spacer {
+        height: 600px;
+        color: #737373;
+        padding: 12px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="stage">
+        <div id="swatch"></div>
+        <div id="values"></div>
+      </section>
+      <aside id="panel">
+        <div id="tune"></div>
+        <div id="spacer">Scroll the panel, then open the select and the color picker.</div>
+      </aside>
+    </main>
+    <script type="module" src="./host.ts"></script>
+  </body>
+</html>

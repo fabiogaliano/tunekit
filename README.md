@@ -129,6 +129,25 @@ PaneStore.registerPanel("my-panel", "Controls", { opacity: [0.5, 0, 1] });
 PaneStore.updateValue("my-panel", "opacity", 0.8);
 ```
 
+## Mount into your own element
+
+Pass `host` to render the pane inside an element you own (a sidebar, a tab) instead of floating over the page. It fills the element's width and flows with it; there is no drag, dock, resize or saved position, and the element's own scroller scrolls it. The header, preset row and **Copy** stay. Popovers still open beside the pane.
+
+```ts
+import { initPane, PaneStore } from "tunekit/core"; // no React import
+
+PaneStore.registerPanel("card", "Card", { radius: [12, 0, 48], accent: "#6d5dfc" });
+const stop = PaneStore.subscribe("card", () => render(PaneStore.getValues("card"))); // flat values by dot-path
+const unmount = initPane({ host: document.querySelector("#tune")! });
+
+// later
+unmount();
+stop();
+PaneStore.unregisterPanel("card");
+```
+
+Each hosted `initPane` is its own mount with its own `unmount`; it doesn't share the floating pane's reference count, so both can be open at once (they show the same panels). Keyboard shortcuts are handled by whichever pane mounted first, so a press never applies twice. The host must not set `transform`, `filter` or `contain` on an ancestor of the pane, which would trap the fixed-position popovers. `test/host.html` is a working page: `pnpm build && pnpm exec vp dev test`, then open `/host.html`.
+
 ## Thanks
 
 - **[dialkit](https://github.com/joshpuckett/dialkit)** by Josh Puckett. tunekit is built on its ideas, and the XY pad, image picker, easing editor, keyboard helpers and shortcut handling are vendored from it (MIT, see `src/vendor/dialkit`). Thank you, Josh.
